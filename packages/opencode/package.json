@@ -1,6 +1,6 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
-  "version": "1.17.20",
+  "version": "0.1.3",
   "name": "@puetsua/kancode",
   "type": "module",
   "license": "MIT",

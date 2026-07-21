@@ -51,7 +51,7 @@
     },
     "packages/codemode": {
       "name": "@kancode/codemode",
-      "version": "1.17.20",
+      "version": "0.2.4",
       "dependencies": {
         "acorn": "8.15.0",
         "effect": "catalog:",
@@ -65,7 +65,7 @@
     },
     "packages/core": {
       "name": "@kancode/core",
-      "version": "1.17.20",
+      "version": "0.2.4",
       "dependencies": {
         "@ai-sdk/alibaba": "1.0.17",
         "@ai-sdk/amazon-bedrock": "4.0.112",
@@ -155,7 +155,7 @@
     },
     "packages/effect-drizzle-sqlite": {
       "name": "@kancode/effect-drizzle-sqlite",
-      "version": "1.17.20",
+      "version": "0.2.4",
       "dependencies": {
         "drizzle-orm": "catalog:",
         "effect": "catalog:",
@@ -169,7 +169,7 @@
     },
     "packages/http-recorder": {
       "name": "@kancode/http-recorder",
-      "version": "1.17.20",
+      "version": "0.2.4",
       "dependencies": {
         "@effect/platform-node": "4.0.0-beta.83",
         "@effect/platform-node-shared": "4.0.0-beta.83",
@@ -200,7 +200,7 @@
     },
     "packages/kancode": {
       "name": "@kancode/cli",
-      "version": "1.17.20",
+      "version": "0.2.4",
       "bin": {
         "kancode": "./bin/kancode",
       },
@@ -328,7 +328,7 @@
     },
     "packages/llm": {
       "name": "@kancode/llm",
-      "version": "1.17.20",
+      "version": "0.2.4",
       "dependencies": {
         "@kancode/schema": "workspace:*",
         "@smithy/eventstream-codec": "4.2.14",
@@ -347,7 +347,7 @@
     },
     "packages/plugin": {
       "name": "@kancode/plugin",
-      "version": "1.17.20",
+      "version": "0.2.4",
       "dependencies": {
         "@ai-sdk/provider": "3.0.8",
         "@kancode/sdk": "workspace:*",
@@ -423,7 +423,7 @@
     },
     "packages/sdk/js": {
       "name": "@kancode/sdk",
-      "version": "1.17.20",
+      "version": "0.2.4",
       "dependencies": {
         "cross-spawn": "catalog:",
       },
@@ -438,7 +438,7 @@
     },
     "packages/server": {
       "name": "@kancode/server",
-      "version": "1.17.20",
+      "version": "0.2.4",
       "dependencies": {
         "@kancode/core": "workspace:*",
         "@kancode/protocol": "workspace:*",
@@ -453,7 +453,7 @@
     },
     "packages/tui": {
       "name": "@kancode/tui",
-      "version": "1.17.20",
+      "version": "0.2.4",
       "dependencies": {
         "@kancode/core": "workspace:*",
         "@kancode/plugin": "workspace:*",
@@ -480,7 +480,7 @@
     },
     "packages/ui": {
       "name": "@kancode/ui",
-      "version": "1.17.20",
+      "version": "0.2.4",
       "dependencies": {
         "@kobalte/core": "catalog:",
         "@pierre/diffs": "catalog:",

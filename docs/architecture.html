@@ -207,8 +207,9 @@
       <h1>Architecture</h1>
       <p class="lede">
         KanCode is a TUI/CLI AI coding agent — a Bun monorepo fork of OpenCode with
-        Effect-domain services, typed HttpApi, dual LLM backends, and KanCode-branded
-        user config while keeping OpenCode project compatibility.
+        Effect-domain services, typed HttpApi, dual LLM backends, and KanCode-only
+        config paths (<code>kancode.json(c)</code>, <code>.kancode/</code>). Legacy
+        OpenCode project layouts migrate via the built-in <code>import-opencode</code> skill.
       </p>
       <nav class="toc" aria-label="Table of contents">
         <a href="#overview">Overview</a>
@@ -231,8 +232,7 @@
           <strong>Mental model:</strong> Bun TUI/CLI shell
           (<code>packages/kancode</code> → bin <code>kancode</code>) around Effect
           domain Core + typed Protocol/Server API, with Schema contracts, dual LLM
-          backends, Drizzle SQLite persistence, and OpenCode-compatible project config
-          under a KanCode-only user home.
+          backends, Drizzle SQLite persistence, and KanCode-only config / data paths.
         </p>
       </div>
       <div class="grid-2">
@@ -245,8 +245,10 @@
         <div class="tile">
           <h3>Agents</h3>
           <p><code>default</code> — full-access development.
-            <code>plan</code> — read-only exploration (denies edits; asks before bash).
-            <code>@general</code> — internal multistep subagent.</p>
+            <code>plan</code> — denies edit tools (bash still allowed by default).
+            Subagents: <code>general</code>, <code>explore</code>.
+            Also <code>cruisecontrol</code> (primary) plus hidden helpers
+            (<code>compaction</code>, <code>title</code>, <code>summary</code>).</p>
         </div>
       </div>
     </section>
@@ -280,6 +282,7 @@ flowchart TB
   Schema --> Core
   Schema --> Protocol
   Schema --> LLM
+  LLM --> Core
   Protocol --> Server
   Core --> Server
   Schema --> Client
@@ -310,7 +313,7 @@ flowchart TB
           <tr>
             <td><code>kancode</code> (<code>@kancode/cli</code>)</td>
             <td>App entry: CLI, TUI launch, HTTP listen, session/tool/config orchestration</td>
-            <td>tui, server, protocol, schema, llm, plugin, sdk, codemode, core</td>
+            <td>tui, server, protocol, schema, llm, plugin, sdk, codemode, core, script, http-recorder</td>
           </tr>
           <tr>
             <td><code>tui</code></td>
@@ -324,8 +327,8 @@ flowchart TB
           </tr>
           <tr>
             <td><code>core</code></td>
-            <td>Domain runtime: DB, sessions, tool registry, permissions, PTY, projects, migrations</td>
-            <td>schema, llm, plugin, effect-drizzle-sqlite</td>
+            <td>Domain runtime: DB, sessions, canonical tools, permissions, PTY, projects, migrations</td>
+            <td>schema, llm, plugin, effect-drizzle-sqlite, http-recorder</td>
           </tr>
           <tr>
             <td><code>schema</code></td>
@@ -360,7 +363,7 @@ flowchart TB
           <tr>
             <td><code>llm</code></td>
             <td>Schema-first LLM core: Protocol × Endpoint × Auth × Framing routes</td>
-            <td>schema</td>
+            <td>schema, http-recorder</td>
           </tr>
           <tr>
             <td><code>plugin</code></td>
@@ -488,9 +491,10 @@ sequenceDiagram
       </ul>
       <p>
         Native path is opt-in via <code>OPENCODE_EXPERIMENTAL_NATIVE_LLM=true</code>
-        (or umbrella experimental). Supports selected OpenAI / OpenAI-compatible /
+        only — the umbrella <code>OPENCODE_EXPERIMENTAL</code> flag does
+        <strong>not</strong> enable it. Supports selected OpenAI / OpenAI-compatible /
         Anthropic API-key routes; unsupported cases fall back to AI SDK.
-        Tool execution stays opencode/core-owned on both paths.
+        Tool execution stays app/core-owned on both paths.
       </p>
       <div class="diagram">
         <pre class="mermaid">
@@ -518,12 +522,12 @@ flowchart TB
         <div class="tile">
           <h3>Tools</h3>
           <p>
-            Canonical type: <code>Tool.make</code> in <code>packages/core/src/tool/</code>.
-            Application registrations are process-scoped; location-scoped registry
-            overlays win. Built-ins (bash, edit, write, grep, glob, LSP, plan, …)
-            live under <code>packages/kancode/src/tool/</code>. Settlement and model-output
-            bounding happen in the registry; authorization stays in each leaf via
-            <code>PermissionV2</code>.
+            Canonical type: <code>Tool.make</code> in <code>packages/core/src/tool/</code>
+            (Location-scoped builtins + process-scoped application registrations;
+            settlement / model-output bounding in the Core registry). The app still
+            wires product tools under <code>packages/kancode/src/tool/</code>
+            (bash/shell, edit, write, grep, glob, LSP, plan, task, …) on top of that
+            model. Authorization stays in each leaf via <code>PermissionV2</code>.
           </p>
         </div>
         <div class="tile">
@@ -547,21 +551,21 @@ flowchart TB
     </section>
 
     <section id="config">
-      <h2>Config merge</h2>
+      <h2>Config</h2>
       <p>
-        Project scope dual-reads OpenCode then KanCode (KanCode wins). User / XDG /
-        home scope is KanCode-only — no <code>~/.opencode</code> fallback.
-        Env: honor <code>OPENCODE_*</code>; <code>KANCODE_*</code> aliases win when both are set.
+        Runtime load is KanCode-only. Project scope does <strong>not</strong> read
+        <code>opencode.json(c)</code> or discover project <code>.opencode/</code>
+        for config. Migrate legacy layouts with the built-in
+        <code>import-opencode</code> skill. Env: honor <code>OPENCODE_*</code>;
+        <code>KANCODE_*</code> aliases win when both are set.
       </p>
       <div class="diagram">
         <pre class="mermaid">
 flowchart LR
-  A["opencode.json(c)"] --> M["file merge"]
-  B["kancode.json(c)"] --> M
-  C[".opencode/*"] --> M2["dir merge"]
-  D[".kancode/*"] --> M2
-  M --> M2
-  M2 --> E["effective Config<br/>KanCode wins"]
+  A["kancode.json(c)"] --> E["effective Config"]
+  B[".kancode/*"] --> E
+  C["~/.kancode / XDG kancode"] --> E
+  D["skills: .opencode/skill(s)<br/>+ other external skill roots"] -.-> E
         </pre>
       </div>
       <table>
@@ -571,15 +575,19 @@ flowchart LR
         <tbody>
           <tr>
             <td>Project files</td>
-            <td><code>opencode.json(c)</code> then <code>kancode.json(c)</code>; <code>.jsonc</code> preferred within a family</td>
+            <td><code>kancode.json(c)</code> only (<code>.jsonc</code> preferred over <code>.json</code>)</td>
           </tr>
           <tr>
             <td>Project dirs</td>
-            <td><code>.opencode/</code> then <code>.kancode/</code>; <code>.kancode</code> wins on conflict</td>
+            <td><code>.kancode/</code> only — no project <code>.opencode/</code> config discovery</td>
           </tr>
           <tr>
             <td>User / XDG</td>
-            <td>KanCode only: <code>kancode.json(c)</code>, <code>~/.kancode</code>, XDG <code>…/kancode</code></td>
+            <td>KanCode only: <code>kancode.json(c)</code>, <code>~/.kancode</code>, XDG <code>…/kancode</code> — no <code>~/.opencode</code></td>
+          </tr>
+          <tr>
+            <td>Skills exception</td>
+            <td>Also scans external skill roots (<code>.claude</code>, <code>.agents</code>, <code>.cursor</code>, <code>.codex</code>, <code>.kilo</code>, and legacy <code>.opencode/skill(s)</code>). Config and other resources stay KanCode-only.</td>
           </tr>
           <tr>
             <td>Data paths</td>
@@ -641,16 +649,19 @@ flowchart TB
           <tr><td><code>cli/</code></td><td>yargs commands, network options</td></tr>
           <tr><td><code>session/</code></td><td>Session service, processor, prompt, LLM adapters, compaction, status</td></tr>
           <tr><td><code>server/</code></td><td>HTTP listen, instance HttpApi assembly, projectors</td></tr>
-          <tr><td><code>config/</code></td><td>Load/merge opencode + kancode configs</td></tr>
-          <tr><td><code>tool/</code></td><td>Built-in tools + registry glue</td></tr>
+          <tr><td><code>config/</code></td><td>Load KanCode configs (<code>kancode.json(c)</code>, <code>.kancode/</code>)</td></tr>
+          <tr><td><code>tool/</code></td><td>App-side built-in tools + registry glue</td></tr>
           <tr><td><code>plugin/</code></td><td>Built-in / provider plugins</td></tr>
           <tr><td><code>project/</code></td><td>Instance / project / workspace bootstrap</td></tr>
           <tr><td><code>provider/</code></td><td>Provider catalog / auth (AI SDK path)</td></tr>
           <tr><td><code>permission/</code></td><td>Product permission UX / modules</td></tr>
+          <tr><td><code>account/</code>, <code>auth/</code></td><td>Account / auth surfaces</td></tr>
+          <tr><td><code>control-plane/</code>, <code>worktree/</code></td><td>Workspace control-plane adapters, git worktrees</td></tr>
           <tr><td><code>mcp/</code>, <code>lsp/</code>, <code>acp/</code></td><td>Protocol integrations</td></tr>
           <tr><td><code>agent/</code>, <code>command/</code>, <code>skill/</code></td><td>Agents, slash commands, skills</td></tr>
           <tr><td><code>effect/</code></td><td>Runtime flags, instance state, bridges</td></tr>
           <tr><td><code>bus/</code>, <code>background/</code>, <code>question/</code></td><td>Events, jobs, user questions</td></tr>
+          <tr><td><code>format/</code>, <code>git/</code>, <code>snapshot/</code></td><td>Formatting, git helpers, snapshots</td></tr>
         </tbody>
       </table>
       <p>

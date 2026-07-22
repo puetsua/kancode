@@ -39,6 +39,7 @@ import { type AutocompleteRef, Autocomplete } from "./autocomplete"
 import { useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
 import type { AssistantMessage, FilePart, UserMessage } from "@kancode/sdk/v2"
 import { Locale } from "../../util/locale"
+import { formatEditorFileLabel } from "../../util/editor-file-label"
 import { errorMessage } from "../../util/error"
 import { formatDuration } from "../../util/format"
 import { createColors, createFrames } from "../../ui/spinner"
@@ -52,7 +53,16 @@ import { createFadeIn } from "../../util/signal"
 import { DialogSkill } from "../dialog-skill"
 import { DialogWorkspaceUnavailable } from "../dialog-workspace-unavailable"
 import { useArgs } from "../../context/args"
-import { OPENCODE_BASE_MODE, useBindings, useCommandShortcut, useLeaderActive, useOpencodeKeymap } from "../../keymap"
+import {
+  OPENCODE_BASE_MODE,
+  formatArmedQueueHintKey,
+  useBindings,
+  useCommandShortcut,
+  useKeymapSelector,
+  useLeaderActive,
+  useOpencodeKeymap,
+  type OpenTuiKeymap,
+} from "../../keymap"
 import { useTuiConfig } from "../../config"
 import { usePromptWorkspace } from "./workspace"
 import { usePromptMove } from "./move"
@@ -172,6 +182,13 @@ export function Prompt(props: PromptProps) {
   const agentShortcut = useCommandShortcut("agent.cycle")
   const paletteShortcut = useCommandShortcut("command.palette.show")
   const queuedShortcut = useCommandShortcut("session.queued_prompts")
+  const queuedSequence = useKeymapSelector(
+    (km: OpenTuiKeymap) =>
+      km
+        .getCommandBindings({ visibility: "registered", commands: ["session.queued_prompts"] })
+        .get("session.queued_prompts")?.[0]?.sequence,
+  )
+  const queuedArmedHint = createMemo(() => formatArmedQueueHintKey(queuedSequence(), tuiConfig) ?? "")
   const renderer = useRenderer()
   const exit = useExit()
   const dimensions = useTerminalDimensions()
@@ -197,23 +214,15 @@ export function Prompt(props: PromptProps) {
       .filter(Boolean)
       .join(" ")
   })
-  const editorFileLabel = createMemo(() => {
+  const editorFileLabelDisplay = createMemo(() => {
     const value = editorPath()
     if (!value) return
-    const filename = path.basename(value)
-    const file = /^index\.[^./]+$/.test(filename)
-      ? [path.basename(path.dirname(value)), filename].filter(Boolean).join("/")
-      : filename
-    return `${file.split(path.sep).join("/")}${editorSelectionLabel() ?? ""}`
-  })
-  const editorFileLabelDisplay = createMemo(() => {
-    const file = editorFileLabel()
-    if (!file) return
-    const source = editor.sourceLabel()
-    const max = Math.max(12, Math.min(48, Math.floor(dimensions().width / 3)))
-    if (!source) return Locale.truncateMiddle(file, max)
-    const budget = Math.max(8, max - source.length - 3)
-    return `${source} · ${Locale.truncateMiddle(file, budget)}`
+    return formatEditorFileLabel({
+      filePath: value,
+      selectionLabel: editorSelectionLabel(),
+      sourceLabel: editor.sourceLabel(),
+      width: dimensions().width,
+    })
   })
   const editorContextLabelState = createMemo(() => editor.labelState())
   const [auto, setAuto] = createSignal<AutocompleteRef>()
@@ -1644,12 +1653,19 @@ export function Prompt(props: PromptProps) {
                       {store.interrupt > 0 ? "again to interrupt" : "interrupt"}
                     </span>
                   </text>
-                  <text fg={theme.text}>
-                    enter <span style={{ fg: theme.textMuted }}>to steer</span>
-                  </text>
-                  <Show when={queuedShortcut()}>
+                  <Show when={!leader()}>
                     <text fg={theme.text}>
-                      {queuedShortcut()} <span style={{ fg: theme.textMuted }}>to queue</span>
+                      enter <span style={{ fg: theme.textMuted }}>to steer</span>
+                    </text>
+                    <Show when={queuedShortcut()}>
+                      <text fg={theme.text}>
+                        {queuedShortcut()} <span style={{ fg: theme.textMuted }}>to queue</span>
+                      </text>
+                    </Show>
+                  </Show>
+                  <Show when={leader() && queuedArmedHint()}>
+                    <text fg={theme.text}>
+                      {queuedArmedHint()} <span style={{ fg: theme.textMuted }}>to queue</span>
                     </text>
                   </Show>
                 </box>

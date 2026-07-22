@@ -211,6 +211,30 @@ export function formatKeyBindings(bindings: Parameters<typeof formatCommandBindi
   return formatCommandBindingsExtra(bindings, formatOptions(config))
 }
 
+/** Formatted follow key for a leader chord (`<leader>…`), else undefined. */
+export function formatLeaderChordFollowKey(
+  sequence: Parameters<typeof formatKeySequenceExtra>[0],
+  config: FormatConfig,
+): string | undefined {
+  if (!sequence?.length) return
+  const leaderAt = sequence.findIndex((part) => part.tokenName === LEADER_TOKEN)
+  if (leaderAt < 0) return
+  const follow = sequence[leaderAt + 1]
+  if (!follow) return
+  return formatKeySequence([follow], config) || undefined
+}
+
+/**
+ * Queue hint key while leader is armed: chord follow key when the bind is a
+ * leader chord, otherwise the full shortcut (never a hardcoded "enter").
+ */
+export function formatArmedQueueHintKey(
+  sequence: Parameters<typeof formatKeySequenceExtra>[0],
+  config: FormatConfig,
+): string | undefined {
+  return formatLeaderChordFollowKey(sequence, config) ?? (formatKeySequence(sequence, config) || undefined)
+}
+
 export function registerOpencodeKeymap(keymap: OpenTuiKeymap, renderer: CliRenderer, config: ResolvedKeymapConfig) {
   const modeStack = createOpencodeModeStack(keymap)
   const offCommaBindings = registerCommaBindings(keymap)

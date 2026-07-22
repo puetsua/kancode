@@ -30,9 +30,11 @@ import { footerWidthPolicy } from "./footer.width"
 import {
   OPENCODE_BASE_MODE,
   formatKeyBindings,
+  formatArmedQueueHintKey,
   formatKeySequence,
   useBindings,
   useKeymapSelector,
+  useLeaderActive,
   type OpenTuiKeymap,
 } from "@kancode/tui/keymap"
 import type {
@@ -197,15 +199,14 @@ export function RunFooterView(props: RunFooterViewProps) {
         props.tuiConfig,
       ) ?? "",
   )
-  const queuedShortcut = useKeymapSelector(
+  const queuedSequence = useKeymapSelector(
     (keymap: OpenTuiKeymap) =>
-      formatKeySequence(
-        keymap
-          .getCommandBindings({ visibility: "registered", commands: ["session.queued_prompts"] })
-          .get("session.queued_prompts")?.[0]?.sequence,
-        props.tuiConfig,
-      ) ?? "",
+      keymap
+        .getCommandBindings({ visibility: "registered", commands: ["session.queued_prompts"] })
+        .get("session.queued_prompts")?.[0]?.sequence,
   )
+  const queuedShortcut = createMemo(() => formatKeySequence(queuedSequence(), props.tuiConfig) ?? "")
+  const queuedArmedHint = createMemo(() => formatArmedQueueHintKey(queuedSequence(), props.tuiConfig) ?? "")
   const backgroundShortcut = useKeymapSelector(
     (keymap: OpenTuiKeymap) =>
       formatKeySequence(
@@ -463,6 +464,7 @@ export function RunFooterView(props: RunFooterViewProps) {
   const statuslineBackground = createMemo(() => theme().status)
   const hasActivityMeta = createMemo(() => activityMeta().length > 0)
   const hasModelStatus = createMemo(() => responsive().statusline.showModel && Boolean(modelStatus()))
+  const leader = useLeaderActive()
   const contextHints = createMemo(() => {
     if (!prompt() || shell() || !responsive().statusline.showContextHints) {
       return []
@@ -470,9 +472,16 @@ export function RunFooterView(props: RunFooterViewProps) {
 
     const items: Array<{ kind: string; key: string; label: string }> = []
     if (busy() && !exiting() && queuedPrompts().length === 0) {
-      items.push({ kind: "steer", key: "enter", label: "to steer" })
-      if (queuedShortcut()) {
-        items.push({ kind: "enqueue", key: queuedShortcut(), label: "to queue" })
+      if (leader()) {
+        // Leader armed: show chord follow key (e.g. enter/q), else full shortcut.
+        if (queuedArmedHint()) {
+          items.push({ kind: "enqueue", key: queuedArmedHint(), label: "to queue" })
+        }
+      } else {
+        items.push({ kind: "steer", key: "enter", label: "to steer" })
+        if (queuedShortcut()) {
+          items.push({ kind: "enqueue", key: queuedShortcut(), label: "to queue" })
+        }
       }
     }
     if (foregroundSubagents() && backgroundShortcut()) {

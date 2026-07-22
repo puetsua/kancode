@@ -63,7 +63,7 @@ test("keeps app exit and queued prompts on distinct leader chords", () => {
   const config = resolve({}, { terminalSuspend: true })
 
   expect(config.keybinds.get("app.exit")).toMatchObject([{ key: "ctrl+c,ctrl+d" }])
-  expect(config.keybinds.get("session.queued_prompts")).toMatchObject([{ key: "<leader>q" }])
+  expect(config.keybinds.get("session.queued_prompts")).toMatchObject([{ key: "<leader>enter" }])
 })
 
 test("resolves overrides without mutating input", () => {

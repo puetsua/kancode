@@ -5,7 +5,14 @@ import { testRender, useRenderer } from "@opentui/solid"
 import { expect, test } from "bun:test"
 import { onCleanup } from "solid-js"
 import { TuiKeybind } from "../src/config/keybind"
-import { getOpencodeModeStack, OPENCODE_BASE_MODE, OpencodeKeymapProvider, registerOpencodeKeymap } from "../src/keymap"
+import {
+  formatArmedQueueHintKey,
+  formatLeaderChordFollowKey,
+  getOpencodeModeStack,
+  OPENCODE_BASE_MODE,
+  OpencodeKeymapProvider,
+  registerOpencodeKeymap,
+} from "../src/keymap"
 
 function createResolvedKeymapConfig(input: TuiKeybind.KeybindOverrides = {}) {
   const keybinds = TuiKeybind.parse(input)
@@ -134,6 +141,55 @@ test("mode-less bindings stay active when opencode mode changes", async () => {
         "session.first": 2,
         "model.list": 0,
       },
+    })
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("formatLeaderChordFollowKey returns the chord follow key", async () => {
+  const labels: Record<string, string | undefined> = {}
+
+  function readQueuedSequence(input: TuiKeybind.KeybindOverrides) {
+    const renderer = useRenderer()
+    const keymap = createDefaultOpenTuiKeymap(renderer)
+    const config = createResolvedKeymapConfig(input)
+    const offKeymap = registerOpencodeKeymap(keymap, renderer, config)
+    const offLayer = keymap.registerLayer({
+      bindings: config.keybinds.gather("session", ["session.queued_prompts"]),
+    })
+    onCleanup(() => {
+      offLayer()
+      offKeymap()
+    })
+    return {
+      config,
+      sequence:
+        keymap
+          .getCommandBindings({ visibility: "registered", commands: ["session.queued_prompts"] })
+          .get("session.queued_prompts")?.[0]?.sequence ?? [],
+    }
+  }
+
+  function Harness() {
+    const leaderChord = readQueuedSequence({ session_queued_prompts: "<leader>q" })
+    const plain = readQueuedSequence({ session_queued_prompts: "ctrl+q" })
+
+    labels.follow = formatLeaderChordFollowKey(leaderChord.sequence, leaderChord.config)
+    labels.armed = formatArmedQueueHintKey(leaderChord.sequence, leaderChord.config)
+    labels.plainFollow = formatLeaderChordFollowKey(plain.sequence, plain.config)
+    labels.plainArmed = formatArmedQueueHintKey(plain.sequence, plain.config)
+
+    return <box />
+  }
+
+  const app = await testRender(() => <Harness />)
+  try {
+    expect(labels).toEqual({
+      follow: "q",
+      armed: "q",
+      plainFollow: undefined,
+      plainArmed: "ctrl+q",
     })
   } finally {
     app.renderer.destroy()

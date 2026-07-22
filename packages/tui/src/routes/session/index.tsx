@@ -71,7 +71,7 @@ import { QuestionPrompt } from "./question"
 import { DialogExportOptions } from "../../ui/dialog-export-options"
 import * as Model from "../../util/model"
 import { formatTranscript } from "../../util/transcript"
-import { orderTurnMessages } from "../../util/message-order"
+import { isWaitingUserMessage, orderTurnMessages, pendingDeliveryBadge } from "../../util/message-order"
 import { sessionEpilogue } from "../../util/presentation"
 import { setPreLayoutSiblingMargin } from "../../util/layout"
 import { useTuiConfig } from "../../config"
@@ -1434,6 +1434,7 @@ function UserMessage(props: {
 }) {
   const ctx = use()
   const local = useLocal()
+  const sync = useSync()
   const text = createMemo(() => {
     const texts = props.parts
       .map((x) => {
@@ -1449,10 +1450,18 @@ function UserMessage(props: {
   const visionFallbacks = createMemo(() => visionFallbackParts(props.parts))
   const { theme } = useTheme()
   const [hover, setHover] = createSignal(false)
-  const queued = createMemo(() => props.pending && props.message.id > props.pending)
+  const sessionMessages = createMemo(() => sync.data.message[props.message.sessionID] ?? [])
+  const queued = createMemo(() =>
+    isWaitingUserMessage({
+      messageID: props.message.id,
+      delivery: props.message.delivery,
+      pendingAssistantID: props.pending,
+      messages: sessionMessages(),
+    }),
+  )
   const color = createMemo(() => local.agent.color(props.message.agent))
   const queuedFg = createMemo(() => selectedForeground(theme, color()))
-  const pendingBadge = createMemo(() => (props.message.delivery === "queue" ? " QUEUED " : " STEER "))
+  const pendingBadge = createMemo(() => pendingDeliveryBadge(props.message.delivery))
   const metadataVisible = createMemo(() => queued() || ctx.showTimestamps())
 
   const compaction = createMemo(() => props.parts.find((x) => x.type === "compaction"))

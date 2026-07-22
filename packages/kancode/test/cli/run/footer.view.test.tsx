@@ -1004,7 +1004,7 @@ test("direct footer shows editable prompts and additional queued work while runn
     expect(frame).toContain("a-model-name-long-enough-to-force-responsive-truncation")
     expect(frame).toContain("3 queued")
     expect(frame).toContain("ctrl+b background")
-    expect(frame).toContain("ctrl+x q 3 queued")
+    expect(frame).toContain("ctrl+x enter 3 queued")
     expect(frame).toContain("ctrl+x down subagents")
     expect(frame).toContain("ctrl+p cmd")
     expect(frame).not.toContain("enter to queue")
@@ -1098,7 +1098,7 @@ test("direct footer omits interrupt key hint when interrupt is unbound", async (
   }
 })
 
-test("direct footer hints enter steers and leader-q queues while running", async () => {
+test("direct footer hints enter steers and leader-enter queues while running", async () => {
   const app = await renderFooter({
     state: { phase: "running" },
     currentModel: { providerID: "opencode", modelID: "gpt-5" },
@@ -1110,9 +1110,84 @@ test("direct footer hints enter steers and leader-q queues while running", async
     const frame = app.captureCharFrame()
 
     expect(frame).toContain("enter to steer")
-    expect(frame).toContain("ctrl+x q to queue")
-    expect(frame).not.toContain("enter to queue")
+    expect(frame).toContain("ctrl+x enter to queue")
+    // Bare enter queues would look like "enter to queue" without the leader chord.
+    expect(frame.replaceAll("ctrl+x enter to queue", "")).not.toContain("enter to queue")
     expect(frame).not.toContain("queued")
+  } finally {
+    app.cleanup()
+  }
+})
+
+test("direct footer swaps to chord follow key while leader is armed", async () => {
+  const app = await renderFooter({
+    state: { phase: "running" },
+    currentModel: { providerID: "opencode", modelID: "gpt-5" },
+    width: 120,
+  })
+
+  try {
+    await app.renderOnce()
+    app.mockInput.pressKey("x", { ctrl: true })
+    await app.renderOnce()
+    const frame = app.captureCharFrame()
+
+    // Default session.queued_prompts is <leader>enter → follow key is "enter".
+    expect(frame).toContain("enter to queue")
+    expect(frame).not.toContain("enter to steer")
+    expect(frame).not.toContain("ctrl+x enter to queue")
+    expect(frame).not.toContain("queued")
+  } finally {
+    app.cleanup()
+  }
+})
+
+test("direct footer armed queue hint follows remapped leader chord", async () => {
+  const app = await renderFooter({
+    state: { phase: "running" },
+    currentModel: { providerID: "opencode", modelID: "gpt-5" },
+    tuiConfig: createTuiResolvedConfig({ keybinds: { session_queued_prompts: "<leader>q" } }),
+    width: 120,
+  })
+
+  try {
+    await app.renderOnce()
+    const idle = app.captureCharFrame()
+    expect(idle).toContain("ctrl+x q to queue")
+
+    app.mockInput.pressKey("x", { ctrl: true })
+    await app.renderOnce()
+    const frame = app.captureCharFrame()
+
+    expect(frame).toContain("q to queue")
+    expect(frame).not.toContain("enter to queue")
+    expect(frame).not.toContain("enter to steer")
+    expect(frame).not.toContain("ctrl+x q to queue")
+  } finally {
+    app.cleanup()
+  }
+})
+
+test("direct footer armed queue hint falls back to full shortcut when not a leader chord", async () => {
+  const app = await renderFooter({
+    state: { phase: "running" },
+    currentModel: { providerID: "opencode", modelID: "gpt-5" },
+    tuiConfig: createTuiResolvedConfig({ keybinds: { session_queued_prompts: "ctrl+q" } }),
+    width: 120,
+  })
+
+  try {
+    await app.renderOnce()
+    const idle = app.captureCharFrame()
+    expect(idle).toContain("ctrl+q to queue")
+
+    app.mockInput.pressKey("x", { ctrl: true })
+    await app.renderOnce()
+    const frame = app.captureCharFrame()
+
+    expect(frame).toContain("ctrl+q to queue")
+    expect(frame).not.toContain("enter to queue")
+    expect(frame).not.toContain("enter to steer")
   } finally {
     app.cleanup()
   }

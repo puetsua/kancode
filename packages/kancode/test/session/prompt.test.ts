@@ -1428,54 +1428,639 @@ it.instance("prompt submitted during an active run is included in the next LLM i
   }),
 )
 
-it.instance("loop processes user message when messageID predates the in-flight assistant", () =>
-  Effect.gen(function* () {
-    const { llm } = yield* useServerConfig(providerCfg)
-    const gate = yield* Deferred.make<void>()
-    const prompt = yield* SessionPrompt.Service
-    const sessions = yield* Session.Service
-    const chat = yield* sessions.create({ title: "Pinned" })
+it.instance(
+  "queued delivery waits for the active turn instead of steering mid-turn",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const gate = yield* Deferred.make<void>()
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "Pinned" })
 
-    yield* llm.hold("first", deferredAsPromise(gate))
-    yield* llm.text("second")
-    yield* user(chat.id, "first")
+      yield* llm.hold("first", deferredAsPromise(gate))
+      yield* llm.text("second")
 
-    const staleID = MessageID.ascending()
-    const loop = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
-    yield* llm.wait(1)
-    yield* waitForBusy(chat.id)
+      const first = yield* prompt
+        .prompt({
+          sessionID: chat.id,
+          agent: "default",
+          model: ref,
+          parts: [{ type: "text", text: "first" }],
+        })
+        .pipe(Effect.forkChild)
 
-    yield* prompt
-      .prompt({
-        sessionID: chat.id,
-        messageID: staleID,
-        agent: "default",
-        model: ref,
-        parts: [{ type: "text", text: "second" }],
+      yield* llm.wait(1)
+      yield* waitForBusy(chat.id)
+
+      const queuedID = MessageID.ascending()
+      const queued = yield* prompt
+        .prompt({
+          sessionID: chat.id,
+          messageID: queuedID,
+          agent: "default",
+          model: ref,
+          delivery: "queue",
+          parts: [{ type: "text", text: "second" }],
+        })
+        .pipe(Effect.forkChild)
+
+      yield* pollWithTimeout(
+        sessions
+          .messages({ sessionID: chat.id })
+          .pipe(
+            Effect.map((msgs) =>
+              msgs.some((msg) => msg.info.role === "user" && msg.info.id === queuedID) ? true : undefined,
+            ),
+          ),
+        "timed out waiting for queued prompt to save",
+      )
+
+      expect(yield* llm.calls).toBe(1)
+
+      yield* Deferred.succeed(gate, void 0)
+
+      const [firstExit, queuedExit] = yield* Effect.all([Fiber.await(first), Fiber.await(queued)])
+      expect(Exit.isSuccess(firstExit)).toBe(true)
+      expect(Exit.isSuccess(queuedExit)).toBe(true)
+      expect(yield* llm.calls).toBe(2)
+
+      const msgs = yield* sessions.messages({ sessionID: chat.id })
+      const queuedUser = msgs.find((msg) => msg.info.role === "user" && msg.info.id === queuedID)
+      expect(queuedUser?.info).toMatchObject({ role: "user", delivery: "queue" })
+
+      const assistants = msgs.filter((msg) => msg.info.role === "assistant")
+      expect(assistants).toHaveLength(2)
+      const [head, tail] = assistants
+      if (!head || head.info.role !== "assistant") throw new Error("expected first assistant")
+      if (!tail || tail.info.role !== "assistant") throw new Error("expected second assistant")
+      expect(head.info.error).toBeUndefined()
+      expect(head.parts.some((part) => part.type === "text" && part.text === "first")).toBe(true)
+      expect(tail.info.parentID).toBe(queuedID)
+      expect(tail.parts.some((part) => part.type === "text" && part.text === "second")).toBe(true)
+    }),
+  15_000,
+)
+
+it.instance(
+  "queued delivery does not promote during an open tool-calls turn",
+  () =>
+    Effect.gen(function* () {
+      const { dir, llm } = yield* useServerConfig(providerCfg)
+      const gate = yield* Deferred.make<void>()
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({
+        title: "Queue during tool turn",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
       })
-      .pipe(Effect.forkChild)
+      yield* writeText(path.join(dir, "probe.txt"), "probe")
 
-    yield* pollWithTimeout(
-      sessions
-        .messages({ sessionID: chat.id })
-        .pipe(
-          Effect.map((msgs) => (msgs.some((msg) => msg.info.role === "user" && msg.info.id === staleID) ? true : undefined)),
+      yield* llm.tool("glob", { pattern: "**/*.txt" })
+      yield* llm.hold("continued", deferredAsPromise(gate))
+      yield* llm.text("stopped")
+
+      const firstID = MessageID.ascending()
+      const first = yield* prompt
+        .prompt({
+          sessionID: chat.id,
+          messageID: firstID,
+          agent: "default",
+          model: ref,
+          parts: [{ type: "text", text: "check size" }],
+        })
+        .pipe(Effect.forkChild)
+
+      yield* llm.wait(1)
+      yield* waitForBusy(chat.id)
+
+      yield* pollWithTimeout(
+        Effect.gen(function* () {
+          const msgs = yield* MessageV2.filterCompactedEffect(chat.id)
+          const assistant = msgs.findLast((item) => item.info.role === "assistant")
+          const tool = assistant ? toolPart(assistant.parts) : undefined
+          return tool?.state.status === "running" || tool?.state.status === "completed" ? true : undefined
+        }),
+        "timed out waiting for tool round to start",
+      )
+
+      const queuedID = MessageID.ascending()
+      const queued = yield* prompt
+        .prompt({
+          sessionID: chat.id,
+          messageID: queuedID,
+          agent: "default",
+          model: ref,
+          delivery: "queue",
+          parts: [{ type: "text", text: "stop checking" }],
+        })
+        .pipe(Effect.forkChild)
+
+      yield* pollWithTimeout(
+        sessions
+          .messages({ sessionID: chat.id })
+          .pipe(
+            Effect.map((msgs) =>
+              msgs.some((msg) => msg.info.role === "user" && msg.info.id === queuedID) ? true : undefined,
+            ),
+          ),
+        "timed out waiting for queued prompt to save",
+      )
+
+      yield* llm.wait(2)
+
+      {
+        const mid = yield* sessions.messages({ sessionID: chat.id })
+        const assistants = mid.filter((msg) => msg.info.role === "assistant")
+        const cont = assistants.at(-1)
+        if (!cont || cont.info.role !== "assistant") throw new Error("expected continuation assistant")
+        expect(cont.info.parentID).toBe(firstID)
+      }
+
+      // Continuation after tool-calls must not see the queued follow-up yet
+      // (session ses_076291f7… leaked "stop it" into this call and the model
+      // abandoned the open turn despite correct parentIDs).
+      {
+        const inputs = yield* llm.inputs
+        expect(inputs).toHaveLength(2)
+        const continuation = JSON.stringify(inputs.at(1)?.messages ?? [])
+        expect(continuation).toContain("check size")
+        expect(continuation).not.toContain("stop checking")
+      }
+
+      yield* Deferred.succeed(gate, void 0)
+
+      const [firstExit, queuedExit] = yield* Effect.all([Fiber.await(first), Fiber.await(queued)])
+      expect(Exit.isSuccess(firstExit)).toBe(true)
+      expect(Exit.isSuccess(queuedExit)).toBe(true)
+      expect(yield* llm.calls).toBe(3)
+
+      const msgs = yield* sessions.messages({ sessionID: chat.id })
+      const assistants = msgs.filter((msg) => msg.info.role === "assistant")
+      expect(assistants).toHaveLength(3)
+      const [toolRound, continued, queuedReply] = assistants
+      if (!toolRound || toolRound.info.role !== "assistant") throw new Error("expected tool-round assistant")
+      if (!continued || continued.info.role !== "assistant") throw new Error("expected continuation assistant")
+      if (!queuedReply || queuedReply.info.role !== "assistant") throw new Error("expected queued reply assistant")
+
+      expect(toolRound.info.parentID).toBe(firstID)
+      expect(toolRound.info.finish).toBe("tool-calls")
+      expect(continued.info.parentID).toBe(firstID)
+      expect(continued.parts.some((part) => part.type === "text" && part.text === "continued")).toBe(true)
+      expect(queuedReply.info.parentID).toBe(queuedID)
+      expect(queuedReply.parts.some((part) => part.type === "text" && part.text === "stopped")).toBe(true)
+
+      const inputs = yield* llm.inputs
+      const queuedMessages = inputs.at(2)?.messages
+      if (!Array.isArray(queuedMessages)) throw new Error("expected queued LLM messages")
+      expect(queuedMessages.at(-1)).toEqual({ role: "user", content: "stop checking" })
+      expect(JSON.stringify(queuedMessages)).toContain("check size")
+    }),
+  15_000,
+)
+
+it.instance(
+  "queued stop-it mid tool-turn stays out of open-turn LLM context",
+  () =>
+    Effect.gen(function* () {
+      // Mirrors ses_0761ecbf0ffeQqAvFfRb9bDIJQ: user queues "stop it" while the
+      // first assistant is still in tool-calls; continuation must finish the
+      // original turn without seeing the queued text, and the drain call must
+      // place "stop it" AFTER the completed open turn (not wedged mid tools).
+      const { dir, llm } = yield* useServerConfig(providerCfg)
+      const gate = yield* Deferred.make<void>()
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({
+        title: "Queue stop-it mid tool turn",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      yield* writeText(path.join(dir, "kancode.png"), "png")
+
+      yield* llm.tool("glob", { pattern: "**/kancode.png" })
+      yield* llm.hold("checked png", deferredAsPromise(gate))
+      yield* llm.text("stopped as requested")
+
+      const firstID = MessageID.ascending()
+      const first = yield* prompt
+        .prompt({
+          sessionID: chat.id,
+          messageID: firstID,
+          agent: "default",
+          model: ref,
+          parts: [{ type: "text", text: "check kancode.png" }],
+        })
+        .pipe(Effect.forkChild)
+
+      yield* llm.wait(1)
+      yield* waitForBusy(chat.id)
+
+      yield* pollWithTimeout(
+        Effect.gen(function* () {
+          const msgs = yield* MessageV2.filterCompactedEffect(chat.id)
+          const assistant = msgs.findLast((item) => item.info.role === "assistant")
+          const tool = assistant ? toolPart(assistant.parts) : undefined
+          return tool?.state.status === "running" || tool?.state.status === "completed" ? true : undefined
+        }),
+        "timed out waiting for tool round to start",
+      )
+
+      const queuedID = MessageID.ascending()
+      const queued = yield* prompt
+        .prompt({
+          sessionID: chat.id,
+          messageID: queuedID,
+          agent: "default",
+          model: ref,
+          delivery: "queue",
+          parts: [{ type: "text", text: "stop it" }],
+        })
+        .pipe(Effect.forkChild)
+
+      yield* pollWithTimeout(
+        sessions
+          .messages({ sessionID: chat.id })
+          .pipe(
+            Effect.map((msgs) =>
+              msgs.some((msg) => msg.info.role === "user" && msg.info.id === queuedID) ? true : undefined,
+            ),
+          ),
+        "timed out waiting for queued prompt to save",
+      )
+
+      yield* llm.wait(2)
+
+      const midInputs = yield* llm.inputs
+      expect(midInputs).toHaveLength(2)
+      const openTurnContinuation = JSON.stringify(midInputs.at(1)?.messages ?? [])
+      expect(openTurnContinuation).toContain("check kancode.png")
+      expect(openTurnContinuation).not.toContain("stop it")
+
+      {
+        const mid = yield* sessions.messages({ sessionID: chat.id })
+        const assistants = mid.filter((msg) => msg.info.role === "assistant")
+        const cont = assistants.at(-1)
+        if (!cont || cont.info.role !== "assistant") throw new Error("expected continuation assistant")
+        expect(cont.info.parentID).toBe(firstID)
+      }
+
+      yield* Deferred.succeed(gate, void 0)
+
+      const [firstExit, queuedExit] = yield* Effect.all([Fiber.await(first), Fiber.await(queued)])
+      expect(Exit.isSuccess(firstExit)).toBe(true)
+      expect(Exit.isSuccess(queuedExit)).toBe(true)
+      expect(yield* llm.calls).toBe(3)
+
+      const msgs = yield* sessions.messages({ sessionID: chat.id })
+      const users = msgs.filter((msg) => msg.info.role === "user")
+      const assistants = msgs.filter((msg) => msg.info.role === "assistant")
+      expect(users).toHaveLength(2)
+      expect(assistants).toHaveLength(3)
+
+      const [toolRound, continued, queuedReply] = assistants
+      if (!toolRound || toolRound.info.role !== "assistant") throw new Error("expected tool-round assistant")
+      if (!continued || continued.info.role !== "assistant") throw new Error("expected continuation assistant")
+      if (!queuedReply || queuedReply.info.role !== "assistant") throw new Error("expected queued reply assistant")
+
+      expect(toolRound.info.parentID).toBe(firstID)
+      expect(toolRound.info.finish).toBe("tool-calls")
+      expect(continued.info.parentID).toBe(firstID)
+      expect(continued.info.finish).toBe("stop")
+      expect(continued.parts.some((part) => part.type === "text" && part.text === "checked png")).toBe(true)
+      expect(queuedReply.info.parentID).toBe(queuedID)
+      expect(queuedReply.parts.some((part) => part.type === "text" && part.text === "stopped as requested")).toBe(true)
+
+      const inputs = yield* llm.inputs
+      expect(JSON.stringify(inputs.at(1)?.messages ?? [])).not.toContain("stop it")
+      const queuedMessages = inputs.at(2)?.messages
+      if (!Array.isArray(queuedMessages)) throw new Error("expected queued LLM messages")
+      // Regression: chronological ID order wedges "stop it" between tool rounds
+      // and the model returns empty (ses_0761ecbf…). Drain must continue from the
+      // completed open turn: contiguous tool chain, then final open-turn text,
+      // then queued user (ses_075dcca94… looked mid-turn in ID-ordered transcript).
+      expect(queuedMessages.at(-1)).toEqual({ role: "user", content: "stop it" })
+      expect(JSON.stringify(queuedMessages)).toContain("check kancode.png")
+
+      const roles = queuedMessages.map((msg) =>
+        msg && typeof msg === "object" && "role" in msg ? String((msg as { role: unknown }).role) : "?",
+      )
+      const stopIdx = roles.length - 1
+      expect(roles[stopIdx]).toBe("user")
+      expect(queuedMessages[stopIdx]).toEqual({ role: "user", content: "stop it" })
+      // Immediately before the queued user: completed open-turn assistant text
+      // (not a tool result — that would mean stop-it is still mid-chain).
+      expect(roles[stopIdx - 1]).toBe("assistant")
+      const openFinal = queuedMessages[stopIdx - 1] as { role: string; content: unknown }
+      const openFinalText =
+        typeof openFinal.content === "string" ? openFinal.content : JSON.stringify(openFinal.content)
+      expect(openFinalText).toContain("checked png")
+
+      const firstUserIdx = queuedMessages.findIndex(
+        (msg) =>
+          msg &&
+          typeof msg === "object" &&
+          (msg as { role?: string }).role === "user" &&
+          (msg as { content?: unknown }).content === "check kancode.png",
+      )
+      expect(firstUserIdx).toBeGreaterThanOrEqual(0)
+      const openSlice = roles.slice(firstUserIdx, stopIdx)
+      expect(openSlice.filter((role) => role === "user")).toHaveLength(1)
+      expect(openSlice).toContain("tool")
+      expect(openSlice.at(-1)).toBe("assistant")
+      // Full expected tail for a single tool-round open turn.
+      expect(roles.slice(firstUserIdx)).toEqual(["user", "assistant", "tool", "assistant", "user"])
+    }),
+  15_000,
+)
+
+it.instance(
+  "queued stop-it drain continues from completed multi-tool open turn",
+  () =>
+    Effect.gen(function* () {
+      // Mirrors ses_075dcca94ffeyPdsFSXdTe0yTI: queue arrives between skill/bash
+      // rounds; drain LLM history must end …assistant(final), user(stop it)
+      // with a contiguous open-turn tool chain (no wedged user mid-chain).
+      const { dir, llm } = yield* useServerConfig(providerCfg)
+      const gate = yield* Deferred.make<void>()
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({
+        title: "Queue stop-it multi-tool drain",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      yield* writeText(path.join(dir, "kancode.png"), "png")
+
+      yield* llm.tool("glob", { pattern: "**/kancode.png" })
+      yield* llm.tool("bash", { command: "check png" })
+      yield* llm.hold("png valid summary", deferredAsPromise(gate))
+      yield* llm.text("stopped as requested")
+
+      const firstID = MessageID.ascending()
+      const first = yield* prompt
+        .prompt({
+          sessionID: chat.id,
+          messageID: firstID,
+          agent: "default",
+          model: ref,
+          parts: [{ type: "text", text: "check kancode.png" }],
+        })
+        .pipe(Effect.forkChild)
+
+      yield* llm.wait(1)
+      yield* waitForBusy(chat.id)
+
+      yield* pollWithTimeout(
+        Effect.gen(function* () {
+          const msgs = yield* MessageV2.filterCompactedEffect(chat.id)
+          const assistant = msgs.findLast((item) => item.info.role === "assistant")
+          const tool = assistant ? toolPart(assistant.parts) : undefined
+          return tool?.state.status === "running" || tool?.state.status === "completed" ? true : undefined
+        }),
+        "timed out waiting for first tool round",
+      )
+
+      const queuedID = MessageID.ascending()
+      const queued = yield* prompt
+        .prompt({
+          sessionID: chat.id,
+          messageID: queuedID,
+          agent: "default",
+          model: ref,
+          delivery: "queue",
+          parts: [{ type: "text", text: "stop it" }],
+        })
+        .pipe(Effect.forkChild)
+
+      yield* pollWithTimeout(
+        sessions
+          .messages({ sessionID: chat.id })
+          .pipe(
+            Effect.map((msgs) =>
+              msgs.some((msg) => msg.info.role === "user" && msg.info.id === queuedID) ? true : undefined,
+            ),
+          ),
+        "timed out waiting for queued prompt to save",
+      )
+
+      yield* llm.wait(3)
+      {
+        const mid = yield* llm.inputs
+        expect(mid).toHaveLength(3)
+        expect(JSON.stringify(mid.at(1)?.messages ?? [])).not.toContain("stop it")
+        expect(JSON.stringify(mid.at(2)?.messages ?? [])).not.toContain("stop it")
+      }
+
+      yield* Deferred.succeed(gate, void 0)
+
+      const [firstExit, queuedExit] = yield* Effect.all([Fiber.await(first), Fiber.await(queued)])
+      expect(Exit.isSuccess(firstExit)).toBe(true)
+      expect(Exit.isSuccess(queuedExit)).toBe(true)
+      expect(yield* llm.calls).toBe(4)
+
+      const msgs = yield* sessions.messages({ sessionID: chat.id })
+      const assistants = msgs.filter((msg) => msg.info.role === "assistant")
+      expect(assistants).toHaveLength(4)
+      expect(assistants[0]?.info.parentID).toBe(firstID)
+      expect(assistants[1]?.info.parentID).toBe(firstID)
+      expect(assistants[2]?.info.parentID).toBe(firstID)
+      expect(assistants[2]?.info.finish).toBe("stop")
+      expect(assistants[3]?.info.parentID).toBe(queuedID)
+
+      // Persisted ID order still wedges the queued user (UI used to show this).
+      const byId = MessageV2.orderTurnMessages(
+        [...msgs].sort((a, b) => (a.info.id < b.info.id ? -1 : a.info.id > b.info.id ? 1 : 0)),
+      )
+      expect(byId.map((m) => m.info.role)).toEqual([
+        "user",
+        "assistant",
+        "assistant",
+        "assistant",
+        "user",
+        "assistant",
+      ])
+      expect(byId[4]?.info.id).toBe(queuedID)
+
+      const inputs = yield* llm.inputs
+      const drain = inputs.at(3)?.messages
+      if (!Array.isArray(drain)) throw new Error("expected drain LLM messages")
+      const roles = drain.map((msg) =>
+        msg && typeof msg === "object" && "role" in msg ? String((msg as { role: unknown }).role) : "?",
+      )
+      const firstUserIdx = drain.findIndex(
+        (msg) =>
+          msg &&
+          typeof msg === "object" &&
+          (msg as { role?: string }).role === "user" &&
+          (msg as { content?: unknown }).content === "check kancode.png",
+      )
+      expect(firstUserIdx).toBeGreaterThanOrEqual(0)
+      expect(roles.slice(firstUserIdx)).toEqual([
+        "user",
+        "assistant",
+        "tool",
+        "assistant",
+        "tool",
+        "assistant",
+        "user",
+      ])
+      expect(drain.at(-1)).toEqual({ role: "user", content: "stop it" })
+      const openFinal = drain.at(-2) as { role: string; content: unknown }
+      expect(openFinal.role).toBe("assistant")
+      const openFinalText =
+        typeof openFinal.content === "string" ? openFinal.content : JSON.stringify(openFinal.content)
+      expect(openFinalText).toContain("png valid summary")
+      expect(JSON.stringify(drain.slice(firstUserIdx, -1))).not.toContain("stop it")
+    }),
+  20_000,
+)
+
+it.instance(
+  "queued delivery drains multiple follow-ups in FIFO order",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const gate = yield* Deferred.make<void>()
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "Multi-queue FIFO" })
+
+      yield* llm.hold("first", deferredAsPromise(gate))
+      yield* llm.text("answer-a")
+      yield* llm.text("answer-b")
+
+      const first = yield* prompt
+        .prompt({
+          sessionID: chat.id,
+          agent: "default",
+          model: ref,
+          parts: [{ type: "text", text: "first" }],
+        })
+        .pipe(Effect.forkChild)
+
+      yield* llm.wait(1)
+      yield* waitForBusy(chat.id)
+
+      const queuedA = MessageID.ascending()
+      const queuedB = MessageID.ascending()
+      const a = yield* prompt
+        .prompt({
+          sessionID: chat.id,
+          messageID: queuedA,
+          agent: "default",
+          model: ref,
+          delivery: "queue",
+          parts: [{ type: "text", text: "queue-a" }],
+        })
+        .pipe(Effect.forkChild)
+      const b = yield* prompt
+        .prompt({
+          sessionID: chat.id,
+          messageID: queuedB,
+          agent: "default",
+          model: ref,
+          delivery: "queue",
+          parts: [{ type: "text", text: "queue-b" }],
+        })
+        .pipe(Effect.forkChild)
+
+      yield* pollWithTimeout(
+        sessions.messages({ sessionID: chat.id }).pipe(
+          Effect.map((msgs) => {
+            const ids = new Set(
+              msgs.filter((msg) => msg.info.role === "user").map((msg) => msg.info.id),
+            )
+            return ids.has(queuedA) && ids.has(queuedB) ? true : undefined
+          }),
         ),
-      "timed out waiting for queued prompt to save",
-    )
+        "timed out waiting for both queued prompts to save",
+      )
 
-    yield* Deferred.succeed(gate, void 0)
-    yield* Fiber.await(loop)
+      expect(yield* llm.calls).toBe(1)
+      yield* Deferred.succeed(gate, void 0)
 
-    expect(yield* llm.calls).toBe(2)
+      const exits = yield* Effect.all([Fiber.await(first), Fiber.await(a), Fiber.await(b)])
+      expect(exits.every(Exit.isSuccess)).toBe(true)
+      expect(yield* llm.calls).toBe(3)
 
-    const msgs = yield* sessions.messages({ sessionID: chat.id })
-    const assistants = msgs.filter((msg) => msg.info.role === "assistant")
-    const last = assistants.at(-1)
-    if (!last || last.info.role !== "assistant") throw new Error("expected second assistant")
-    expect(last.info.parentID).toBe(staleID)
-    expect(last.parts.some((part) => part.type === "text" && part.text === "second")).toBe(true)
-  }),
+      const msgs = yield* sessions.messages({ sessionID: chat.id })
+      const assistants = msgs.filter((msg) => msg.info.role === "assistant")
+      expect(assistants).toHaveLength(3)
+      const [head, mid, tail] = assistants
+      if (!head || head.info.role !== "assistant") throw new Error("expected first assistant")
+      if (!mid || mid.info.role !== "assistant") throw new Error("expected queue-a assistant")
+      if (!tail || tail.info.role !== "assistant") throw new Error("expected queue-b assistant")
+
+      expect(head.parts.some((part) => part.type === "text" && part.text === "first")).toBe(true)
+      expect(mid.info.parentID).toBe(queuedA)
+      expect(mid.parts.some((part) => part.type === "text" && part.text === "answer-a")).toBe(true)
+      expect(tail.info.parentID).toBe(queuedB)
+      expect(tail.parts.some((part) => part.type === "text" && part.text === "answer-b")).toBe(true)
+
+      const inputs = yield* llm.inputs
+      expect(inputs).toHaveLength(3)
+      expect(inputs.at(1)?.messages?.at(-1)).toEqual({ role: "user", content: "queue-a" })
+      expect(inputs.at(2)?.messages?.at(-1)).toEqual({ role: "user", content: "queue-b" })
+    }),
+  15_000,
+)
+
+it.instance(
+  "loop processes queued user when messageID predates the in-flight assistant",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const gate = yield* Deferred.make<void>()
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "Pinned" })
+
+      yield* llm.hold("first", deferredAsPromise(gate))
+      yield* llm.text("second")
+      yield* user(chat.id, "first")
+
+      // Mint before the in-flight assistant so this ID predates that assistant row.
+      const staleID = MessageID.ascending()
+      const loop = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
+      yield* llm.wait(1)
+      yield* waitForBusy(chat.id)
+
+      const queued = yield* prompt
+        .prompt({
+          sessionID: chat.id,
+          messageID: staleID,
+          agent: "default",
+          model: ref,
+          delivery: "queue",
+          parts: [{ type: "text", text: "second" }],
+        })
+        .pipe(Effect.forkChild)
+
+      yield* pollWithTimeout(
+        sessions
+          .messages({ sessionID: chat.id })
+          .pipe(
+            Effect.map((msgs) =>
+              msgs.some((msg) => msg.info.role === "user" && msg.info.id === staleID) ? true : undefined,
+            ),
+          ),
+        "timed out waiting for queued prompt to save",
+      )
+
+      yield* Deferred.succeed(gate, void 0)
+      const [loopExit, queuedExit] = yield* Effect.all([Fiber.await(loop), Fiber.await(queued)])
+      expect(Exit.isSuccess(loopExit)).toBe(true)
+      expect(Exit.isSuccess(queuedExit)).toBe(true)
+
+      expect(yield* llm.calls).toBe(2)
+
+      const msgs = yield* sessions.messages({ sessionID: chat.id })
+      const assistants = msgs.filter((msg) => msg.info.role === "assistant")
+      const last = assistants.at(-1)
+      if (!last || last.info.role !== "assistant") throw new Error("expected second assistant")
+      expect(last.info.parentID).toBe(staleID)
+      expect(last.parts.some((part) => part.type === "text" && part.text === "second")).toBe(true)
+    }),
+  15_000,
 )
 
 it.instance("assertNotBusy fails with BusyError when loop running", () =>

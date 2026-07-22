@@ -259,6 +259,7 @@ export type UserMessage = {
   tools?: {
     [key: string]: boolean
   }
+  delivery?: "steer" | "queue"
 }
 
 export type ProviderAuthError = {
@@ -9828,6 +9829,7 @@ export type SessionPromptData = {
     format?: OutputFormat
     system?: string
     variant?: string
+    delivery?: "steer" | "queue"
     parts: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
   }
   path: {
@@ -10099,6 +10101,7 @@ export type SessionPromptAsyncData = {
     format?: OutputFormat
     system?: string
     variant?: string
+    delivery?: "steer" | "queue"
     parts: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
   }
   path: {

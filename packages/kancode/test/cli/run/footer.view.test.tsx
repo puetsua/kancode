@@ -1007,6 +1007,8 @@ test("direct footer shows editable prompts and additional queued work while runn
     expect(frame).toContain("ctrl+x q 3 queued")
     expect(frame).toContain("ctrl+x down subagents")
     expect(frame).toContain("ctrl+p cmd")
+    expect(frame).not.toContain("enter to queue")
+    expect(frame).not.toContain("enter to steer")
     expect(frame).toContain("a-model-name-long-enough-to-force-responsive-truncation")
     expect(frame).toContain("subagents · ctrl+p cmd")
     expect(frame).not.toContain("1 agent")
@@ -1091,6 +1093,26 @@ test("direct footer omits interrupt key hint when interrupt is unbound", async (
 
     expect(frame).toContain("interrupt")
     expect(frame).not.toContain("ctrl+l")
+  } finally {
+    app.cleanup()
+  }
+})
+
+test("direct footer hints enter steers and leader-q queues while running", async () => {
+  const app = await renderFooter({
+    state: { phase: "running" },
+    currentModel: { providerID: "opencode", modelID: "gpt-5" },
+    width: 120,
+  })
+
+  try {
+    await app.renderOnce()
+    const frame = app.captureCharFrame()
+
+    expect(frame).toContain("enter to steer")
+    expect(frame).toContain("ctrl+x q to queue")
+    expect(frame).not.toContain("enter to queue")
+    expect(frame).not.toContain("queued")
   } finally {
     app.cleanup()
   }

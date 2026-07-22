@@ -95,6 +95,41 @@ function formatMcpResourceBytes(value: number) {
   return `${Math.ceil(value / (1024 * 1024))} MB`
 }
 
+function assistantHasPendingTools(parts: SessionV1.Part[]) {
+  return parts.some(
+    (part) => part.type === "tool" && !part.metadata?.providerExecuted && !isOrphanedInterruptedTool(part),
+  )
+}
+
+function isUserAnswered(msgs: { info: SessionV1.Info; parts: SessionV1.Part[] }[], userID: string) {
+  let assistant: SessionV1.Assistant | undefined
+  let assistantParts: SessionV1.Part[] = []
+  for (const msg of msgs) {
+    if (msg.info.role !== "assistant" || msg.info.parentID !== userID) continue
+    if (!assistant || msg.info.id > assistant.id) {
+      assistant = msg.info
+      assistantParts = msg.parts
+    }
+  }
+  if (!assistant) return false
+  // Aborted/errored turns are done — steer replaces them; don't resume.
+  if (assistant.error) return true
+  if (!assistant.finish || ["tool-calls"].includes(assistant.finish)) return false
+  if (assistantHasPendingTools(assistantParts)) return false
+  return true
+}
+
+/** Oldest user that still needs an assistant reply (FIFO drain for multi-queue). */
+function oldestUnansweredUser(msgs: { info: SessionV1.Info; parts: SessionV1.Part[] }[]) {
+  let oldest: SessionV1.User | undefined
+  for (const msg of msgs) {
+    if (msg.info.role !== "user") continue
+    if (isUserAnswered(msgs, msg.info.id)) continue
+    if (!oldest || msg.info.id < oldest.id) oldest = msg.info
+  }
+  return oldest
+}
+
 function isOrphanedInterruptedTool(part: SessionV1.ToolPart) {
   // cleanup() marks abandoned tool_use blocks this way after retries/aborts.
   // They are not pending work and must not trigger an assistant-prefill request.
@@ -670,6 +705,7 @@ const layer = Layer.effect(
         },
         system: input.system,
         format: input.format,
+        ...(input.delivery ? { delivery: input.delivery } : {}),
       }
 
       const current = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
@@ -1055,11 +1091,21 @@ const layer = Layer.effect(
     const prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts, Image.Error> = Effect.fn(
       "SessionPrompt.prompt",
     )(function* (input: PromptInput) {
-      // Abort any in-flight turn before deleting reverted messages so abort
-      // cleanup and revert cleanup do not race on the same rows.
-      yield* state.cancel(input.sessionID)
+      const delivery = input.delivery ?? "steer"
+      const current = yield* status.get(input.sessionID)
+      // Codex-style queue: admit the follow-up and let the active loop drain it
+      // after the current turn finishes. Steer (default) still cancels first.
+      const queueWhileBusy = delivery === "queue" && current.type !== "idle"
+
+      if (!queueWhileBusy) {
+        // Abort any in-flight turn before deleting reverted messages so abort
+        // cleanup and revert cleanup do not race on the same rows.
+        yield* state.cancel(input.sessionID)
+      }
       const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
-      yield* revert.cleanup(session)
+      if (!queueWhileBusy) {
+        yield* revert.cleanup(session)
+      }
       const message = yield* createUserMessage(input)
       yield* sessions.touch(input.sessionID)
 
@@ -1099,9 +1145,10 @@ const layer = Layer.effect(
             Effect.provideService(Database.Service, database),
           )
 
-          const { user: lastUser, assistant: lastAssistant, finished: lastFinished, tasks } = MessageV2.latest(msgs)
-
-          if (!lastUser) throw new Error("No user message found in stream. This should never happen.")
+          const latest = MessageV2.latest(msgs)
+          const lastAssistant = latest.assistant
+          const lastFinished = latest.finished
+          const tasks = latest.tasks
 
           const lastAssistantMsg = msgs.findLast(
             (msg) => msg.info.role === "assistant" && msg.info.id === lastAssistant?.id,
@@ -1114,12 +1161,61 @@ const layer = Layer.effect(
               (part) => part.type === "tool" && !part.metadata?.providerExecuted && !isOrphanedInterruptedTool(part),
             ) ?? false
 
-          if (
-            lastAssistant?.finish &&
-            !["tool-calls"].includes(lastAssistant.finish) &&
-            !hasToolCalls &&
-            lastAssistant.parentID === lastUser.id
-          ) {
+          // Queued users can arrive while a multi-step tool turn is still open.
+          // MessageV2.latest prefers the newest user, so stay on the open turn's
+          // parent until that turn fully completes (same open rules as loop exit).
+          // Skip errored/aborted assistants — steer cancel leaves those without
+          // finish, and the new user should take over rather than resume them.
+          const turnOpen =
+            !!lastAssistant &&
+            !lastAssistant.error &&
+            (!lastAssistant.finish || ["tool-calls"].includes(lastAssistant.finish) || hasToolCalls)
+
+          // After the open turn finishes, drain unanswered users FIFO (oldest
+          // first). Using MessageV2.latest alone would jump to the newest queued
+          // user and skip earlier ones.
+          let lastUser = latest.user
+          if (turnOpen && lastAssistant) {
+            const openUser = msgs.find((msg) => msg.info.role === "user" && msg.info.id === lastAssistant.parentID)
+            if (openUser?.info.role === "user") lastUser = openUser.info
+          } else {
+            lastUser = oldestUnansweredUser(msgs) ?? latest.user
+          }
+
+          if (!lastUser) throw new Error("No user message found in stream. This should never happen.")
+
+          // Snapshot before context filtering so FIFO drain still sees later queues.
+          const allMsgs = msgs
+
+          // Queued (or otherwise later) users must stay out of the open turn's
+          // model context. Otherwise the continuation after tool-calls sees
+          // "stop it" mid-turn and abandons the original work (parentIDs can
+          // still be correct while the LLM transcript is wrong).
+          // Only hide when we rebound — once the open turn finishes, lastUser is
+          // the queued follow-up again and it must be eligible to run.
+          const activeUserID = lastUser.id
+          if (latest.user && latest.user.id !== activeUserID) {
+            msgs = msgs.filter((msg) => {
+              if (msg.info.role === "user") return msg.info.id <= activeUserID
+              if (msg.info.role === "assistant") return msg.info.parentID <= activeUserID
+              return true
+            })
+          }
+
+          // Queued users are persisted mid-turn (ID between open-turn assistants).
+          // After the open turn completes they must appear at the end of model
+          // context, not wedged between tool rounds — otherwise the LLM sees a
+          // broken tool chain and may return empty (ses_0761ecbf…).
+          msgs = MessageV2.orderTurnMessages(msgs)
+
+          const turnDone =
+            !!lastAssistant &&
+            lastAssistant.parentID === lastUser.id &&
+            (!!lastAssistant.error ||
+              (!!lastAssistant.finish &&
+                !["tool-calls"].includes(lastAssistant.finish) &&
+                !hasToolCalls))
+          if (turnDone) {
             const orphan = lastAssistantMsg?.parts.find(
               (part): part is SessionV1.ToolPart => part.type === "tool" && isOrphanedInterruptedTool(part),
             )
@@ -1131,6 +1227,11 @@ const layer = Layer.effect(
                 callID: orphan.callID,
               })
             }
+            // This user is done — keep draining older→newer unanswered queues.
+            // Use allMsgs (pre-filter) so later queued users remain visible.
+            // Guard next.id !== lastUser.id so a disagreeing answered-check cannot spin.
+            const nextUnanswered = oldestUnansweredUser(allMsgs)
+            if (nextUnanswered && nextUnanswered.id !== lastUser.id) continue
             yield* Effect.logInfo("exiting loop", { "session.id": sessionID })
             break
           }
@@ -1392,13 +1493,11 @@ const layer = Layer.effect(
             const fresh = yield* MessageV2.filterCompactedEffect(sessionID).pipe(
               Effect.provideService(Database.Service, database),
             )
-            const pending = MessageV2.latest(fresh)
-            const answered =
-              pending.user &&
-              pending.assistant?.finish &&
-              !["tool-calls"].includes(pending.assistant.finish) &&
-              pending.assistant.parentID === pending.user.id
-            if (!answered) continue
+            // Prefer FIFO unanswered check over MessageV2.latest (newest user).
+            // Only continue for a *different* unanswered user — never spin on the
+            // user we just finished (answered-check can lag finish persistence).
+            const nextUnanswered = oldestUnansweredUser(fresh)
+            if (nextUnanswered && nextUnanswered.id !== lastUser.id) continue
             break
           }
           continue
@@ -1578,6 +1677,7 @@ export const PromptInput = Schema.Struct({
   format: Schema.optional(SessionV1.Format),
   system: Schema.optional(Schema.String),
   variant: Schema.optional(Schema.String),
+  delivery: Schema.optional(Schema.Literals(["steer", "queue"])),
   parts: Schema.Array(
     Schema.Union([
       SessionV1.TextPartInput,

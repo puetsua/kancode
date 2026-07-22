@@ -1,8 +1,8 @@
 // Serial prompt queue for direct interactive mode.
 //
-// Prompts arrive from the footer (user types and hits enter) and queue up
-// here. The queue drains one turn at a time; ordinary prompts waiting behind
-// an active ordinary turn are exposed for edit/removal until they begin.
+// Prompts arrive from the footer. Enter while a turn is active steers (aborts
+// the in-flight turn and runs next). Leader-q (`delivery: "queue"`) waits until
+// the current turn finishes and exposes those prompts for edit/removal.
 //
 // The queue also handles /exit, /quit, and /new commands, empty-prompt rejection,
 // and tracks per-turn wall-clock duration for the footer status line.
@@ -54,8 +54,9 @@ function defer<T = void>(): Deferred<T> {
 // Runs the prompt queue until the footer closes.
 //
 // Subscribes to footer prompt events and drains operations through input.run().
-// Ordinary prompts submitted during an ordinary active turn remain local and
-// are exposed by the footer for edit/removal until their turn begins.
+// Ordinary prompts with delivery "queue" during an ordinary active turn remain
+// local and are exposed by the footer for edit/removal until their turn begins.
+// Enter (no delivery / steer) aborts the active turn and runs immediately next.
 export async function runPromptQueue(input: QueueInput): Promise<void> {
   const stop = defer<{ type: "closed" }>()
   const done = defer()
@@ -276,14 +277,15 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
     }
 
     const active = state.active
-    if (
-      active &&
+    const ordinaryBusy =
+      !!active &&
       active.mode !== "shell" &&
       !active.command &&
       prompt.mode !== "shell" &&
       !prompt.command &&
       !isNewCommand(prompt.text)
-    ) {
+
+    if (ordinaryBusy && prompt.delivery === "queue") {
       const queueKey = PartID.ascending()
       const queued: FooterQueuedPrompt = {
         // Removal key only — session message IDs are minted when the turn starts.
@@ -293,6 +295,15 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
       }
       state.queued = [...state.queued, queued]
       state.queue.push(prompt)
+      syncQueue()
+      return
+    }
+
+    if (ordinaryBusy) {
+      // Steer: abort the in-flight turn and run this prompt next (ahead of any
+      // already-queued leader-q items), matching main TUI Enter semantics.
+      state.ctrl?.abort()
+      state.queue.unshift(prompt)
       syncQueue()
       return
     }

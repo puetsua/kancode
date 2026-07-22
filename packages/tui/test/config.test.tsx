@@ -59,6 +59,13 @@ test("resolves host-neutral defaults", () => {
   expect(config.keybinds.has("session.list")).toBe(true)
 })
 
+test("keeps app exit and queued prompts on distinct leader chords", () => {
+  const config = resolve({}, { terminalSuspend: true })
+
+  expect(config.keybinds.get("app.exit")).toMatchObject([{ key: "ctrl+c,ctrl+d" }])
+  expect(config.keybinds.get("session.queued_prompts")).toMatchObject([{ key: "<leader>q" }])
+})
+
 test("resolves overrides without mutating input", () => {
   const input: TuiConfigInfo = {
     theme: "custom",

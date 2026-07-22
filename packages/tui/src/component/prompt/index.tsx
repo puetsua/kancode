@@ -171,6 +171,7 @@ export function Prompt(props: PromptProps) {
   const keymap = useOpencodeKeymap()
   const agentShortcut = useCommandShortcut("agent.cycle")
   const paletteShortcut = useCommandShortcut("command.palette.show")
+  const queuedShortcut = useCommandShortcut("session.queued_prompts")
   const renderer = useRenderer()
   const exit = useExit()
   const dimensions = useTerminalDimensions()
@@ -367,6 +368,19 @@ export function Prompt(props: PromptProps) {
         run: async () => {
           if (!input.focused) return
           const handled = await submit()
+          if (!handled) return
+
+          dialog.clear()
+        },
+      },
+      {
+        title: "Queue prompt",
+        desc: "Submit with delivery queue (wait until the current turn finishes)",
+        name: "session.queued_prompts",
+        category: "Session",
+        run: async () => {
+          if (!input.focused) return
+          const handled = await submit({ delivery: "queue" })
           if (!handled) return
 
           dialog.clear()
@@ -602,6 +616,7 @@ export function Prompt(props: PromptProps) {
       "prompt.stash.list",
       "prompt.skills",
       "session.interrupt",
+      "session.queued_prompts",
       "workspace.set",
       "session.move",
     ]),
@@ -956,7 +971,7 @@ export function Prompt(props: PromptProps) {
   })
 
   let submitting = false
-  async function submit() {
+  async function submit(options?: { delivery?: "steer" | "queue" }) {
     // Prevent overlapping invocations (e.g. a double-pressed Enter, or the
     // input's native onSubmit racing another dispatch). Without this guard,
     // a second call slips past the empty-input check before the first call
@@ -966,13 +981,13 @@ export function Prompt(props: PromptProps) {
     if (submitting) return false
     submitting = true
     try {
-      return await submitInner()
+      return await submitInner(options)
     } finally {
       submitting = false
     }
   }
 
-  async function submitInner() {
+  async function submitInner(options?: { delivery?: "steer" | "queue" }) {
     workspace.clearNotice()
 
     // IME: double-defer may fire before onContentChange flushes the last
@@ -1127,6 +1142,7 @@ export function Prompt(props: PromptProps) {
             agent: agent.name,
             model: selectedModel,
             variant,
+            ...(options?.delivery ? { delivery: options.delivery } : {}),
             parts: [
               ...editorParts,
               {
@@ -1621,12 +1637,22 @@ export function Prompt(props: PromptProps) {
                     })()}
                   </box>
                 </box>
-                <text fg={store.interrupt > 0 ? theme.primary : theme.text}>
-                  esc{" "}
-                  <span style={{ fg: store.interrupt > 0 ? theme.primary : theme.textMuted }}>
-                    {store.interrupt > 0 ? "again to interrupt" : "interrupt"}
-                  </span>
-                </text>
+                <box flexDirection="row" gap={2} flexShrink={0}>
+                  <text fg={store.interrupt > 0 ? theme.primary : theme.text}>
+                    esc{" "}
+                    <span style={{ fg: store.interrupt > 0 ? theme.primary : theme.textMuted }}>
+                      {store.interrupt > 0 ? "again to interrupt" : "interrupt"}
+                    </span>
+                  </text>
+                  <text fg={theme.text}>
+                    enter <span style={{ fg: theme.textMuted }}>to steer</span>
+                  </text>
+                  <Show when={queuedShortcut()}>
+                    <text fg={theme.text}>
+                      {queuedShortcut()} <span style={{ fg: theme.textMuted }}>to queue</span>
+                    </text>
+                  </Show>
+                </box>
               </box>
             </Match>
             <Match when={workspace.notice()}>

@@ -45,7 +45,7 @@ const keybind = (value: Definition["default"], description: string): Definition 
 export const Definitions = {
   leader: keybind(LeaderDefault, "Leader key for keybind combinations"),
 
-  app_exit: keybind("ctrl+c,ctrl+d,<leader>q", "Exit the application"),
+  app_exit: keybind("ctrl+c,ctrl+d", "Exit the application"),
   app_debug: keybind("none", "Toggle debug panel"),
   app_console: keybind("none", "Toggle console"),
   app_heap_snapshot: keybind("none", "Write heap snapshot"),
@@ -100,7 +100,7 @@ export const Definitions = {
   session_compact: keybind("<leader>c", "Compact the session"),
   session_toggle_timestamps: keybind("none", "Toggle message timestamps"),
   session_toggle_generic_tool_output: keybind("none", "Toggle generic tool output"),
-  session_queued_prompts: keybind("<leader>q", "Manage queued prompts"),
+  session_queued_prompts: keybind("<leader>q", "Queue current prompt"),
   session_child_first: keybind("<leader>down", "Go to first child session"),
   session_child_cycle: keybind("right", "Go to next child session"),
   session_child_cycle_reverse: keybind("left", "Go to previous child session"),

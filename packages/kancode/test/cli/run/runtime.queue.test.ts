@@ -67,8 +67,13 @@ function footer() {
     api,
     events,
     commits,
-    submit(text: string, mode?: RunPrompt["mode"]) {
-      const next = mode ? { text, parts: [] as RunPrompt["parts"], mode } : { text, parts: [] as RunPrompt["parts"] }
+    submit(text: string, mode?: RunPrompt["mode"], delivery?: RunPrompt["delivery"]) {
+      const next: RunPrompt = {
+        text,
+        parts: [],
+        ...(mode ? { mode } : {}),
+        ...(delivery ? { delivery } : {}),
+      }
       for (const fn of [...prompts]) {
         fn(next)
       }
@@ -308,7 +313,7 @@ describe("run runtime queue", () => {
     })
 
     ui.submit("one")
-    ui.submit("two")
+    ui.submit("two", undefined, "queue")
     await Promise.resolve()
     expect(seen).toEqual(["one"])
 
@@ -335,7 +340,7 @@ describe("run runtime queue", () => {
     })
 
     ui.submit("one")
-    ui.submit("two")
+    ui.submit("two", undefined, "queue")
     await Promise.resolve()
     await Promise.resolve()
 
@@ -377,9 +382,9 @@ describe("run runtime queue", () => {
     })
 
     ui.submit("active")
-    ui.submit("queued one")
-    ui.submit("queued two")
-    ui.submit("queued three")
+    ui.submit("queued one", undefined, "queue")
+    ui.submit("queued two", undefined, "queue")
+    ui.submit("queued three", undefined, "queue")
     await Promise.resolve()
     await Promise.resolve()
 
@@ -449,7 +454,7 @@ describe("run runtime queue", () => {
     })
 
     ui.submit("one")
-    ui.submit("two")
+    ui.submit("two", undefined, "queue")
     await Promise.resolve()
 
     const event = ui.events.findLast((item) => item.type === "queued.prompts")
@@ -464,6 +469,53 @@ describe("run runtime queue", () => {
     expect(seen).toHaveLength(2)
     expect(seen[1]).not.toBe(queuedKey)
     expect(seen[1]).not.toBe(seen[0])
+  })
+
+  test("enter while busy steers by aborting the active turn before queued items", async () => {
+    const ui = footer()
+    const seen: string[] = []
+    const aborted: boolean[] = []
+    let wakeQueued: (() => void) | undefined
+    const queuedGate = new Promise<void>((resolve) => {
+      wakeQueued = resolve
+    })
+
+    const task = runPromptQueue({
+      footer: ui.api,
+      run: async (input, signal) => {
+        seen.push(input.text)
+        if (input.text === "active") {
+          await new Promise<void>((resolve) => {
+            if (signal.aborted) {
+              resolve()
+              return
+            }
+            signal.addEventListener("abort", () => resolve(), { once: true })
+          })
+          aborted.push(signal.aborted)
+          return
+        }
+        if (input.text === "queued") {
+          wakeQueued?.()
+          ui.api.close()
+        }
+      },
+    })
+
+    ui.submit("active")
+    await Promise.resolve()
+    ui.submit("queued", undefined, "queue")
+    await Promise.resolve()
+    ui.submit("steer")
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(seen[0]).toBe("active")
+    expect(aborted[0]).toBe(true)
+
+    await queuedGate
+    await task
+    expect(seen).toEqual(["active", "steer", "queued"])
   })
 
   test("close aborts the active run and drops pending queued work", async () => {
@@ -496,7 +548,7 @@ describe("run runtime queue", () => {
 
     ui.submit("one")
     await Promise.resolve()
-    ui.submit("two")
+    ui.submit("two", undefined, "queue")
     ui.api.close()
     await task
 

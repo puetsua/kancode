@@ -89,7 +89,8 @@ export type PromptState = {
   offset: Accessor<number>
   rows: Accessor<number>
   requestExit: () => boolean
-  onSubmit: () => void
+  hasText: () => boolean
+  onSubmit: (options?: { delivery?: "steer" | "queue" }) => void
   submitText: (text: string) => void
   openEditor: (input?: { value?: string }) => Promise<void>
   onKeyDown: (event: KeyEvent) => void
@@ -108,6 +109,7 @@ function clonePrompt(prompt: RunPrompt): RunPrompt {
     text: prompt.text,
     parts: structuredClone(prompt.parts),
     ...(prompt.mode ? { mode: prompt.mode } : {}),
+    ...(prompt.delivery ? { delivery: prompt.delivery } : {}),
     ...(prompt.command ? { command: prompt.command } : {}),
   }
 }
@@ -1220,9 +1222,16 @@ export function createPromptState(input: PromptInput): PromptState {
     })
   }
 
-  const onSubmit = () => {
+  const onSubmit = (options?: { delivery?: "steer" | "queue" }) => {
     syncDraft()
-    submitPrompt(clonePrompt(draft))
+    const next = clonePrompt(draft)
+    if (options?.delivery) next.delivery = options.delivery
+    submitPrompt(next)
+  }
+
+  const hasText = () => {
+    syncDraft()
+    return Boolean(draft.text.trim())
   }
 
   const submitText = (text: string) => {
@@ -1293,6 +1302,7 @@ export function createPromptState(input: PromptInput): PromptState {
     offset: menu.offset,
     rows: menu.rows,
     requestExit,
+    hasText,
     onSubmit,
     submitText,
     openEditor,

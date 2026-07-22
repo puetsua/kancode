@@ -36,6 +36,8 @@ export type RunPrompt = {
   text: string
   parts: RunPromptPart[]
   mode?: "shell"
+  /** Enter omits this (steer). Leader-q sets "queue" while a turn is active. */
+  delivery?: "steer" | "queue"
   command?: {
     name: string
     arguments: string

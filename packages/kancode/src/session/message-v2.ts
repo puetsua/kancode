@@ -518,6 +518,39 @@ export const get = Effect.fn("MessageV2.get")(function* (input: { sessionID: Ses
   }
 })
 
+/**
+ * Queued users are persisted mid-turn (ID between open-turn assistants).
+ * For model context and transcript display, keep each turn's tool chain
+ * contiguous and append unanswered users after their preceding turn ends.
+ */
+export function orderTurnMessages<T extends { info: { id: string; role: string; parentID?: string } }>(msgs: T[]): T[] {
+  const ordered: T[] = []
+  const placedUsers = new Set<string>()
+  for (const msg of msgs) {
+    if (msg.info.role === "assistant") {
+      const parentID = msg.info.parentID
+      if (parentID && !placedUsers.has(parentID)) {
+        const parent = msgs.find((m) => m.info.role === "user" && m.info.id === parentID)
+        if (parent) {
+          ordered.push(parent)
+          placedUsers.add(parentID)
+        }
+      }
+      ordered.push(msg)
+      continue
+    }
+    if (msg.info.role === "user") continue
+    ordered.push(msg)
+  }
+  for (const msg of msgs) {
+    if (msg.info.role === "user" && !placedUsers.has(msg.info.id)) {
+      ordered.push(msg)
+      placedUsers.add(msg.info.id)
+    }
+  }
+  return ordered
+}
+
 export function filterCompacted(msgs: Iterable<WithParts>) {
   const result = [] as WithParts[]
   const completed = new Set<string>()

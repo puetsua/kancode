@@ -380,6 +380,15 @@ export function RunFooterView(props: RunFooterViewProps) {
     onRows: props.onRows,
     onStatus: props.onStatus,
   })
+  const queueOrManagePrompts = () => {
+    // Prefer enqueue when the composer has text; manage only when input is empty.
+    // Explicit queue delivery — Enter (onSubmit without options) steers instead.
+    if (composer.hasText()) {
+      composer.onSubmit({ delivery: "queue" })
+      return
+    }
+    openQueuedMenu()
+  }
   const shell = createMemo(() => prompt() && composer.shell())
   const menu = createMemo(() => prompt() && composer.visible())
   const stateStatus = createMemo(() => props.state().status.trim())
@@ -460,6 +469,12 @@ export function RunFooterView(props: RunFooterViewProps) {
     }
 
     const items: Array<{ kind: string; key: string; label: string }> = []
+    if (busy() && !exiting() && queuedPrompts().length === 0) {
+      items.push({ kind: "steer", key: "enter", label: "to steer" })
+      if (queuedShortcut()) {
+        items.push({ kind: "enqueue", key: queuedShortcut(), label: "to queue" })
+      }
+    }
     if (foregroundSubagents() && backgroundShortcut()) {
       items.push({ kind: "background", key: backgroundShortcut(), label: "background" })
     }
@@ -551,13 +566,13 @@ export function RunFooterView(props: RunFooterViewProps) {
 
   useBindings(() => ({
     mode: OPENCODE_BASE_MODE,
-    enabled: active().type === "prompt" && route().type === "composer" && queuedPrompts().length > 0,
+    enabled: active().type === "prompt" && route().type === "composer",
     commands: [
       {
         name: "session.queued_prompts",
-        title: "Manage queued prompts",
+        title: "Queue current prompt",
         category: "Session",
-        run: openQueuedMenu,
+        run: queueOrManagePrompts,
       },
     ],
     bindings: props.tuiConfig.keybinds.get("session.queued_prompts"),

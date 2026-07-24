@@ -24,6 +24,8 @@ Repo-wide principles only. Package-level `AGENTS.md` owns package detail; `opens
 
 ## Git
 
+- Remote: **`origin` = `puetsua/kancode` only**. Do not add or use an `upstream` remote to `anomalyco/opencode`.
+- Always pass `--repo puetsua/kancode` to `gh` (PRs, issues, releases, checks). Never open PRs against `anomalyco/opencode`.
 - Branches: ≤3 hyphenated words, no slashes or type prefixes (`session-recovery`, not `feat/foo`).
 - Commits / PR titles: `type(scope): summary` — `feat|fix|docs|chore|refactor|test`; scopes like `core`, `kancode`, `tui`, `sdk`, `plugin`, `server`, `cli`.
 

@@ -34,6 +34,7 @@ export function createCruiseControlPlugin(bridge: EffectBridge.Shape): Plugin {
       decide: async (req) => {
         const result = await bridge.promise(
           decideCruiseControl({
+            model: input.model,
             moduleID: PermissionModuleSchema.CRUISE_CONTROL,
             permission: req.permission,
             patterns: req.patterns,

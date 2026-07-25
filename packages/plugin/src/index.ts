@@ -88,6 +88,76 @@ export type PermissionModuleRegistration = {
 }
 
 /**
+ * Message for the model capability. Declared structurally rather than
+ * re-exported from `ai` so plugins do not inherit the host's pinned SDK version.
+ */
+export type ModelMessage = {
+  role: "system" | "user" | "assistant"
+  content: string
+}
+
+export type ModelGenerateInput = {
+  /** `providerID/modelID`, e.g. `opencode/deepseek-v4-flash`. Required — the host never substitutes a default. */
+  model: string
+  messages: readonly ModelMessage[]
+  /** Plain JSON Schema describing the expected object. */
+  schema: Record<string, unknown>
+  schemaName?: string
+  schemaDescription?: string
+  temperature?: number
+  maxOutputTokens?: number
+  /** Per-call deadline. The host aborts the underlying request when it elapses. */
+  timeoutMs?: number
+  abortSignal?: AbortSignal
+}
+
+export type ModelGenerateResult<T = unknown> = {
+  object: T
+  model: { providerID: string; modelID: string }
+  usage?: { input?: number; output?: number; total?: number }
+}
+
+/**
+ * `no_object` carries the raw model text so callers can attempt their own lenient
+ * recovery. `unavailable` means the provider stack is not initialized yet.
+ */
+export type ModelErrorCode =
+  | "model_unset"
+  | "model_not_found"
+  | "auth"
+  | "timeout"
+  | "aborted"
+  | "no_object"
+  | "rate_limit"
+  | "provider_error"
+  | "budget"
+  | "unavailable"
+
+export interface ModelGenerateError extends Error {
+  readonly name: "ModelGenerateError"
+  readonly code: ModelErrorCode
+  /** Whether retrying the identical call could plausibly succeed. */
+  readonly retryable: boolean
+  /** Raw model output; present when `code` is `no_object`. */
+  readonly text?: string
+}
+
+export function isModelGenerateError(value: unknown): value is ModelGenerateError {
+  return value instanceof Error && value.name === "ModelGenerateError" && "code" in value
+}
+
+/**
+ * Structured generation against a user-configured model. The host resolves the
+ * provider and its credentials; plugins never receive a key or an SDK handle.
+ *
+ * The host owns the per-call timeout only. Retries, backoff, and pacing are
+ * caller policy — inspect `retryable` on a rejection to decide.
+ */
+export type ModelCapability = {
+  generate<T = unknown>(input: ModelGenerateInput): Promise<ModelGenerateResult<T>>
+}
+
+/**
  * Resolved KanCode user-scope application roots. Exposed so plugins can reason
  * about managed app directories without importing host-internal packages.
  */
@@ -106,6 +176,8 @@ export type PluginInput = {
   worktree: string
   /** Resolved KanCode config/data/cache/state/tmp roots. */
   paths: PluginPaths
+  /** Structured generation against a user-configured model. */
+  model: ModelCapability
   experimental_workspace: {
     register(type: string, adapter: WorkspaceAdapter): void
   }

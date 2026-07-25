@@ -766,10 +766,15 @@ itMissingModel.instance("missing cruise_control model denies without human ask",
     const unregister = modules.registerSync({
       id: PermissionModuleSchema.CRUISE_CONTROL,
       decide: (input) =>
-        decideCruiseControl(input).pipe(
-          Effect.provideService(Config.Service, config),
-          Effect.provideService(Provider.Service, provider),
-        ),
+        // Model capability must never be reached: an unset model short-circuits first.
+        decideCruiseControl({
+          ...input,
+          model: {
+            generate: async () => {
+              throw new Error("classifier must not call the model when none is configured")
+            },
+          },
+        }).pipe(Effect.provideService(Config.Service, config), Effect.provideService(Provider.Service, provider)),
     })
     expect(
       yield* modules.decide({

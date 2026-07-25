@@ -2,12 +2,11 @@ import { FSUtil } from "@kancode/core/fs-util"
 import { Global } from "@kancode/core/global"
 import { PermissionModule as CorePermissionModule } from "@kancode/core/permission/module"
 import { PermissionModule as PermissionModuleSchema } from "@kancode/schema/permission-module"
-import { generateObject, jsonSchema, NoObjectGeneratedError, type ModelMessage } from "ai"
+import { isModelGenerateError, type ModelCapability, type ModelMessage } from "@kancode/plugin"
 import { Duration, Effect, Schedule, Schema, Semaphore } from "effect"
 import path from "path"
 import { explicitApprovalIntent } from "@/session/cruise-control-prompt"
 import { Config } from "@/config/config"
-import { Provider, parseModel } from "@/provider/provider"
 import { ToolJsonSchema } from "@/tool/json-schema"
 import { actionKey, CACHED_ALLOW_REASON, CACHED_DENY_REASON, lookupDynamic, rememberDynamic } from "./dynamic-list"
 import { destructiveReason } from "./destructive"
@@ -450,14 +449,6 @@ export function buildClassifierMessages(input: {
   ]
 }
 
-const classifierSchema = jsonSchema(CLASSIFIER_JSON_SCHEMA, {
-  validate: (value) => {
-    const parsed = parseClassifierResult(value)
-    if (!parsed) return { success: false as const, error: new Error("invalid classifier result") }
-    return { success: true as const, value: parsed }
-  },
-})
-
 /** Apply authoritative allowlist / never_auto rails without human escalation. */
 export function applySafety(
   decision: CruiseControlDecision,
@@ -707,26 +698,32 @@ export const runClassifier = Effect.fn("CruiseControl.runClassifier")(function* 
   }
 })
 
+/**
+ * Classify through the public plugin model capability. The host validates only
+ * against the raw JSON Schema, so normalization and lenient recovery from
+ * near-miss output stay here rather than crossing the plugin boundary.
+ */
 async function generateClassifierObject(input: {
-  language: Parameters<typeof generateObject>[0]["model"]
+  model: ModelCapability
+  modelRef: string
   messages: ModelMessage[]
+  timeoutMs: number
 }): Promise<ClassifierObject> {
   try {
-    const result = await generateObject({
-      model: input.language,
-      schema: classifierSchema,
+    const result = await input.model.generate({
+      model: input.modelRef,
+      messages: input.messages,
+      schema: CLASSIFIER_JSON_SCHEMA as Record<string, unknown>,
       schemaName: "cruise_control_assessment",
       schemaDescription: "Independent high, medium, or low assessments of tool-action risk and explicit user intent",
-      messages: input.messages,
       temperature: 0,
-      experimental_repairText: async ({ text }) => {
-        const recovered = parseClassifierResult(text)
-        return recovered ? JSON.stringify(recovered) : null
-      },
+      timeoutMs: input.timeoutMs,
     })
-    return result.object
+    const parsed = parseClassifierResult(result.object)
+    if (!parsed) throw new Error("invalid classifier result")
+    return parsed
   } catch (error) {
-    if (NoObjectGeneratedError.isInstance(error)) {
+    if (isModelGenerateError(error) && error.code === "no_object") {
       const recovered = parseClassifierResult(error.text)
       if (recovered) return recovered
     }
@@ -735,9 +732,10 @@ async function generateClassifierObject(input: {
 }
 
 /** Effect decide handler for the built-in cruise_control permission module. */
-export const decideCruiseControl = Effect.fn("CruiseControl.decide")(function* (input: DecideInput) {
+export const decideCruiseControl = Effect.fn("CruiseControl.decide")(function* (
+  input: DecideInput & { model: ModelCapability },
+) {
   const config = yield* Config.Service
-  const provider = yield* Provider.Service
   const cfg = yield* config.get()
   const opts = cfg.permission_modules?.[PermissionModuleSchema.CRUISE_CONTROL]
   const modelRef = opts?.model?.trim()
@@ -748,17 +746,6 @@ export const decideCruiseControl = Effect.fn("CruiseControl.decide")(function* (
   }
 
   const classify = Effect.gen(function* () {
-    const parsed = parseModel(modelRef)
-    const model = yield* provider.getModel(parsed.providerID, parsed.modelID).pipe(
-      Effect.tapError((error) =>
-        Effect.logWarning("cruise_control model unresolved; denying", {
-          model: modelRef,
-          error: String(error),
-        }),
-      ),
-    )
-    const language = yield* provider.getLanguage(model)
-
     const messages = buildClassifierMessages({
       permission: input.permission,
       patterns: input.patterns,
@@ -769,7 +756,15 @@ export const decideCruiseControl = Effect.fn("CruiseControl.decide")(function* (
     })
 
     return yield* Effect.tryPromise({
-      try: () => generateClassifierObject({ language, messages }),
+      try: () =>
+        generateClassifierObject({
+          model: input.model,
+          modelRef,
+          messages,
+          // Mirrors runClassifier's per-attempt budget so the request is aborted,
+          // not merely abandoned, when the attempt gives up.
+          timeoutMs: opts?.timeout_ms ?? DEFAULT_TIMEOUT_MS,
+        }),
       catch: (cause) => cause,
     })
   })

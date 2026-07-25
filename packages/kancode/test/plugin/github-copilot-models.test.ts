@@ -1,6 +1,7 @@
 import { afterEach, expect, mock, test } from "bun:test"
 import { CopilotModels } from "@/plugin/github-copilot/models"
 import { CopilotAuthPlugin } from "@/plugin/github-copilot/copilot"
+import { fakePluginInput } from "../fixture/plugin"
 
 const originalFetch = globalThis.fetch
 
@@ -381,20 +382,7 @@ test("clears existing variants so refreshed models calculate provider-specific v
 test("remaps fallback oauth model urls to the enterprise host", async () => {
   globalThis.fetch = mock(() => Promise.reject(new Error("timeout"))) as unknown as typeof fetch
 
-  const hooks = await CopilotAuthPlugin({
-    client: {} as never,
-    project: {} as never,
-    directory: "",
-    worktree: "",
-    experimental_workspace: {
-      register() {},
-    },
-    permission: {
-      registerModule() {},
-    },
-    serverUrl: new URL("https://example.com"),
-    $: {} as never,
-  })
+  const hooks = await CopilotAuthPlugin(fakePluginInput())
 
   const models = await hooks.provider!.models!(
     {

@@ -7,6 +7,7 @@ import {
   renderOAuthError,
   type IdTokenClaims,
 } from "../../src/plugin/openai/codex"
+import { fakePluginInput } from "../fixture/plugin"
 
 function createTestJwt(payload: object): string {
   const header = Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url")
@@ -238,7 +239,7 @@ describe("plugin.codex", () => {
     })
 
     const hooks = await CodexAuthPlugin(
-      {
+      fakePluginInput({
         client: {
           auth: {
             async set(input: { body: { refresh: string; access: string; expires: number; accountId?: string } }) {
@@ -253,18 +254,7 @@ describe("plugin.codex", () => {
             },
           },
         } as never,
-        project: {} as never,
-        directory: "",
-        worktree: "",
-        experimental_workspace: {
-          register() {},
-        },
-        permission: {
-          registerModule() {},
-        },
-        serverUrl: new URL("https://example.com"),
-        $: {} as never,
-      },
+      }),
       {
         issuer: server.url.origin,
         codexApiEndpoint: new URL("/backend-api/codex/responses", server.url).toString(),

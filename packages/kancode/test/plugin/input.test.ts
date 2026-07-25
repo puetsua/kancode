@@ -106,6 +106,37 @@ describe("PluginInput.paths", () => {
   )
 })
 
+describe("PluginInput.model", () => {
+  // Proves the capability is actually handed to an externally loaded plugin,
+  // not just present on the type. Provider is absent here, so a real call
+  // surfaces the `unavailable` code rather than crashing plugin load.
+  it.instance("is callable from an externally loaded plugin", () =>
+    withProject(
+      [
+        "export default {",
+        `  id: ${JSON.stringify(PLUGIN_ID)},`,
+        "  server: async (input) => ({",
+        `    ${JSON.stringify(systemHook)}: async (_i, output) => {`,
+        "      output.system.push(typeof input.model.generate)",
+        "      try {",
+        "        await input.model.generate({ model: 'openai/gpt-5.2', messages: [], schema: {} })",
+        "        output.system.push('resolved')",
+        "      } catch (error) {",
+        "        output.system.push(`${error.name}:${error.code}`)",
+        "      }",
+        "    },",
+        "  }),",
+        "}",
+        "",
+      ].join("\n"),
+      {},
+      Effect.gen(function* () {
+        expect(yield* triggerSystemTransform()).toEqual(["function", "ModelGenerateError:unavailable"])
+      }),
+    ),
+  )
+})
+
 describe("plugin_enabled", () => {
   it.instance("skips a plugin explicitly disabled by id", () =>
     withProject(

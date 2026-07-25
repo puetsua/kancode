@@ -24,15 +24,15 @@
 
 ## 4. Plugin Model Capability
 
-- [ ] 4.1 Declare `ModelMessage`, `ModelGenerateInput`, `ModelGenerateResult`, `ModelCapability`, and the typed error with `code`/`retryable` in `packages/plugin/src/index.ts` — structurally, with no `ai` or `effect` imports
-- [ ] 4.2 Implement `packages/kancode/src/plugin/model.ts`: parse the model ref, resolve provider and language model host-side, call `generateObject` with the caller's raw JSON Schema, and map failures onto the error taxonomy
-- [ ] 4.3 Enforce `timeoutMs` with a real abort signal so the underlying request dies, defaulting to 30s with a hard upper bound
-- [ ] 4.4 Wire `model` into `PluginInput` over the existing `EffectBridge`, resolving `Provider.Service` via `Effect.serviceOption` **inside each call** so early-boot use yields `unavailable` instead of crashing on the Provider↔Plugin cycle
-- [ ] 4.5 Add per-call structured logging with plugin id, resolved model, and token usage; enforce a per-plugin concurrency cap and per-turn call budget
-- [ ] 4.6 Add `packages/kancode/test/plugin/model.test.ts` covering: successful resolution and validation; `model_not_found` non-retryable; `no_object` carrying raw text; `timeout` with a genuinely aborted request; `unavailable` before the Provider layer exists; and that the result exposes no SDK handle or credential
-- [ ] 4.7 Add a fixture plugin under `packages/kancode/test/fixture/plugins/` that registers a permission module and calls `input.model.generate`, loaded through the real plugin loader, proving the capability reaches an external plugin
-- [ ] 4.8 Refactor the in-tree classifier to obtain completions through `input.model.generate` instead of `Provider` + `generateObject`
-- [ ] 4.9 Run `bun typecheck` and `bun test` in `packages/plugin` and `packages/kancode`
+- [x] 4.1 Declare `ModelMessage`, `ModelGenerateInput`, `ModelGenerateResult`, `ModelCapability`, and the typed error with `code`/`retryable` in `packages/plugin/src/index.ts` — structurally, with no `ai` or `effect` imports
+- [x] 4.2 Implement `packages/kancode/src/plugin/model.ts`: parse the model ref, resolve provider and language model host-side, call `generateObject` with the caller's raw JSON Schema, and map failures onto the error taxonomy
+- [x] 4.3 Enforce `timeoutMs` with a real abort signal so the underlying request dies, defaulting to 30s with a hard upper bound
+- [x] 4.4 Wire `model` into `PluginInput` over the existing `EffectBridge`, resolving `Provider.Service` via `Effect.serviceOption` **inside each call** so early-boot use yields `unavailable` instead of crashing on the Provider↔Plugin cycle
+- [x] 4.5 Add per-call structured logging with plugin id, resolved model, and token usage; enforce a per-plugin concurrency cap and per-turn call budget
+- [x] 4.6 Add `packages/kancode/test/plugin/model.test.ts` covering: successful resolution and validation; `model_not_found` non-retryable; `no_object` carrying raw text; `timeout` with a genuinely aborted request; `unavailable` before the Provider layer exists; and that the result exposes no SDK handle or credential
+- [x] 4.7 Add a fixture plugin under `packages/kancode/test/fixture/plugins/` that registers a permission module and calls `input.model.generate`, loaded through the real plugin loader, proving the capability reaches an external plugin
+- [x] 4.8 Refactor the in-tree classifier to obtain completions through `input.model.generate` instead of `Provider` + `generateObject`
+- [x] 4.9 Run `bun typecheck` and `bun test` in `packages/plugin` and `packages/kancode`
 
 ## 5. Make The Classifier Portable
 

@@ -375,6 +375,9 @@ function stripPermissionGlob(pattern: string): string {
  * from `@kancode/core/fs-util`, which is private and unpublished.
  */
 function contains(parent: string, child: string): boolean {
+  // A blank or relative root would resolve against process.cwd(), making the
+  // whole project tree read as a managed app directory and auto-allowing it.
+  if (!parent || !path.isAbsolute(parent)) return false
   const result = path.relative(parent, child)
   return result === "" || (!path.isAbsolute(result) && result !== ".." && !result.startsWith(`..${path.sep}`))
 }
@@ -649,11 +652,12 @@ export async function runClassifier(input: {
       decision,
       reason: decision === "allow" ? reason : "Denied by cruise_control safety rails",
       review: { risk: "medium" as const, intent: "high" as const, reason },
-      learned: true as const,
+      learned: false as const,
     }
-    if (input.cacheScope && outcome.decision === "allow") {
-      rememberDynamic(key, "allow", listOpts, input.cacheScope)
-    }
+    // Deliberately NOT cached. Approval is evidence about the specific ask the
+    // user answered, but the cache key is only permission+patterns+command — so a
+    // later identical action the user never saw would ride the same entry, and
+    // skip the classifier entirely. Only low-risk classifier outcomes are learned.
     log.info("cruise_control explicit approval", {
       permission: input.permission,
       patterns: input.patterns,
@@ -715,6 +719,10 @@ export async function runClassifier(input: {
           model: input.modelRef,
           error: String(error),
         })
+        // The host marks permanent failures (unknown model, bad credentials,
+        // exhausted budget) non-retryable. Retrying those cannot succeed, and
+        // each attempt still spends a per-turn budget unit, so stop immediately.
+        if (isPermanentFailure(error)) break
       }
     }
     const attempts = Math.max(0, maxAttempts)
@@ -769,6 +777,19 @@ export async function runClassifier(input: {
  * which would make that package a *runtime* dependency. Keeping it types-only
  * lets the standalone plugin ship with no runtime dependencies at all.
  */
+/**
+ * A host model error the caller must not retry. Duck-typed for the same reason
+ * as {@link isNoObjectError}: importing the host's guard would make
+ * `@kancode/plugin` a runtime dependency.
+ */
+function isPermanentFailure(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.name === "ModelGenerateError" &&
+    (error as { retryable?: unknown }).retryable === false
+  )
+}
+
 function isNoObjectError(error: unknown): error is { code: string; text?: string } {
   return (
     error instanceof Error &&

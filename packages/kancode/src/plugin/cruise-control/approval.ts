@@ -22,6 +22,31 @@ export function isShortAffirmation(text: string): boolean {
   return SHORT_AFFIRMATION.test(trimmed)
 }
 
+/**
+ * Shortest needle allowed to count as "the assistant named this action".
+ * Bare substring matching let one-or-two character patterns — which `grep`,
+ * `glob`, `read`, and `edit` all pass through verbatim — hit incidental letters
+ * in ordinary prose ("s" inside "results"), granting high intent to an action
+ * the user never approved.
+ */
+const MIN_MENTION_LENGTH = 4
+
+/** True when `needle` appears in `haystack` bounded by non-word characters. */
+function mentions(haystack: string, needle: string): boolean {
+  if (needle.length < MIN_MENTION_LENGTH) return false
+  let from = 0
+  while (true) {
+    const at = haystack.indexOf(needle, from)
+    if (at === -1) return false
+    const before = at === 0 ? "" : haystack[at - 1]!
+    const after = haystack[at + needle.length] ?? ""
+    const openLeft = !before || !/[\w]/.test(before) || !/[\w]/.test(needle[0]!)
+    const openRight = !after || !/[\w]/.test(after) || !/[\w]/.test(needle[needle.length - 1]!)
+    if (openLeft && openRight) return true
+    from = at + 1
+  }
+}
+
 /** True when the assistant's reply names the action actually being gated. */
 function pendingActionMentioned(
   assistantReply: string,
@@ -31,12 +56,12 @@ function pendingActionMentioned(
   const haystack = assistantReply.toLowerCase()
   for (const pattern of patterns) {
     const normalized = pattern.trim().toLowerCase()
-    if (normalized && normalized !== "*" && haystack.includes(normalized)) return true
+    if (normalized && normalized !== "*" && mentions(haystack, normalized)) return true
   }
   const command = metadata?.command
   if (typeof command === "string") {
     const normalized = command.trim().toLowerCase()
-    if (normalized && haystack.includes(normalized)) return true
+    if (normalized && mentions(haystack, normalized)) return true
   }
   return false
 }

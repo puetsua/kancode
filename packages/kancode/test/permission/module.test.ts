@@ -43,7 +43,7 @@ import {
   currentUserPrompt,
   formatCruiseControlReview,
 } from "../../src/session/tools"
-import { explicitApprovalIntent } from "../../src/session/cruise-control-prompt"
+import { explicitApprovalIntent } from "../../src/plugin/cruise-control/approval"
 import { EventV2Bridge } from "../../src/event-v2-bridge"
 import { CrossSpawnSpawner } from "@kancode/core/cross-spawn-spawner"
 import { InstanceBootstrap } from "../../src/project/bootstrap"
@@ -1143,7 +1143,9 @@ describe("classifier contract", () => {
         "high",
         "User approved the assistant permission request for this action.",
       ),
-      learned: true,
+      // Not learned: approval is evidence about this specific ask, and the cache
+      // key cannot distinguish a later identical action the user never saw.
+      learned: false,
     })
   })
 
@@ -1272,6 +1274,93 @@ describe("classifier contract", () => {
     )
     expect(managedAppDirectoryAllow("external_directory", [homeConfig], Global.Path)).toBeUndefined()
     expect(managedAppDirectoryAllow("read", [configGlob], Global.Path)).toBeUndefined()
+  })
+
+  describe("explicit approval is never cached", () => {
+    const scope = "workspace\0session\0prompt"
+    const approval = [
+      "<conversation_context>",
+      "<prior_assistant_reply>",
+      "May I run npm publish for this package?",
+      "</prior_assistant_reply>",
+      "<current_user_reply>",
+      "yes",
+      "</current_user_reply>",
+      "</conversation_context>",
+    ].join("\n")
+
+    test("a later identical action without approval is reclassified, not auto-allowed", async () => {
+      clearDynamicLists()
+      let calls = 0
+      const shared = {
+        paths: TEST_PATHS,
+        permission: "bash",
+        patterns: ["npm publish"],
+        opts: { allowlist: ["bash"], timeout_ms: 1000, classify_gap_ms: 0 },
+        cacheScope: scope,
+        classify: async () => {
+          calls += 1
+          return highRiskLowIntent("Publishing is irreversible.")
+        },
+      }
+
+      const approved = await runClassifier({ ...shared, approvalPrompt: approval })
+      expect(approved.decision).toBe("allow")
+      expect(calls).toBe(0)
+
+      // Same action, same turn, but the user never approved this one.
+      const later = await runClassifier(shared)
+      expect(later.decision).toBe("deny")
+      expect(later.reason).not.toBe(CACHED_ALLOW_REASON)
+      expect(calls).toBe(1)
+    })
+  })
+
+  describe("approval action matching", () => {
+    function envelope(assistant: string) {
+      return [
+        "<conversation_context>",
+        "<prior_assistant_reply>",
+        assistant,
+        "</prior_assistant_reply>",
+        "<current_user_reply>",
+        "ok",
+        "</current_user_reply>",
+        "</conversation_context>",
+      ].join("\n")
+    }
+
+    test("does not match incidental substrings in ordinary prose", () => {
+      // `grep`/`glob`/`read` pass model-chosen patterns straight through, so a
+      // one- or two-character pattern must not latch onto unrelated words.
+      expect(explicitApprovalIntent(envelope("May I look at the results?"), ["s"])).toBe(false)
+      expect(explicitApprovalIntent(envelope("Want me to install the deps?"), ["i"])).toBe(false)
+      expect(explicitApprovalIntent(envelope("Shall I run the test suite?"), ["ol"])).toBe(false)
+      expect(explicitApprovalIntent(envelope("May I update the permission controls?"), ["ls"])).toBe(false)
+    })
+
+    test("still matches the action the assistant actually named", () => {
+      expect(explicitApprovalIntent(envelope("May I run git reset --soft HEAD~1?"), ["git reset --soft HEAD~1"])).toBe(
+        true,
+      )
+      expect(
+        explicitApprovalIntent(envelope("Shall I delete build/output.txt?"), ["build/output.txt"]),
+      ).toBe(true)
+      expect(explicitApprovalIntent(envelope("Want me to run `npm install`?"), [], { command: "npm install" })).toBe(
+        true,
+      )
+    })
+  })
+
+  describe("managed directory containment", () => {
+    test("a blank or relative root never contains anything", () => {
+      // Otherwise path.relative resolves against cwd and the whole project tree
+      // reads as a managed app directory.
+      const blank = { config: "", data: "", cache: "", state: "", tmp: "" }
+      expect(isManagedAppDirectoryPattern(path.join(process.cwd(), "src"), blank)).toBe(false)
+      const relative = { ...TEST_PATHS, config: "relative/dir" }
+      expect(isManagedAppDirectoryPattern(path.join("relative", "dir", "x"), relative)).toBe(false)
+    })
   })
 
   describe("cruise_control options reader", () => {

@@ -1918,7 +1918,7 @@ describe("classifier contract", () => {
     expect(second).toEqual({ decision: "allow", reason: CACHED_ALLOW_REASON })
   })
 
-  test("dynamic deny cache hit skips classifier", async () => {
+  test("dynamic deny from high risk is not cached", async () => {
     clearDynamicLists()
     const cacheScope = "workspace\0session\0prompt"
     let calls = 0
@@ -1947,8 +1947,54 @@ describe("classifier contract", () => {
         cacheScope,
       }),
     )
+    expect(calls).toBe(2)
+    expect(second).toEqual(reviewed("deny", "high", "low", "risky"))
+  })
+
+  test("medium risk allow is not cached", async () => {
+    clearDynamicLists()
+    const cacheScope = "workspace\0session\0prompt"
+    let calls = 0
+    const classify = Effect.sync(() => {
+      calls += 1
+      return {
+        risk: "medium" as const,
+        intent: "medium" as const,
+        reason: "Recoverable edit with ambiguous intent.",
+      }
+    })
+    const opts = { fallback: "ask" as const, allowlist: ["edit"], timeout_ms: 1000 }
+    const first = await Effect.runPromise(
+      runClassifier({
+        permission: "edit",
+        patterns: ["src/foo.ts"],
+        opts,
+        classify,
+        modelRef: "opencode/deepseek-v4-flash",
+        hasExplicitPrompt: true,
+        cacheScope,
+      }),
+    )
+    expect(first).toEqual(
+      reviewed("allow", "medium", "medium", "Recoverable edit with ambiguous intent."),
+    )
     expect(calls).toBe(1)
-    expect(second).toEqual({ decision: "deny", reason: CACHED_DENY_REASON })
+
+    const second = await Effect.runPromise(
+      runClassifier({
+        permission: "edit",
+        patterns: ["src/foo.ts"],
+        opts,
+        classify,
+        modelRef: "opencode/deepseek-v4-flash",
+        hasExplicitPrompt: true,
+        cacheScope,
+      }),
+    )
+    expect(calls).toBe(2)
+    expect(second).toEqual(
+      reviewed("allow", "medium", "medium", "Recoverable edit with ambiguous intent."),
+    )
   })
 
   test("dynamic deny wins over allow when both lists match", async () => {
@@ -2093,7 +2139,7 @@ describe("classifier contract", () => {
     expect(second).toEqual({ decision: "deny", reason: CACHED_DENY_REASON })
   })
 
-  test("non-allow matrix outcome derives deny and is cached", async () => {
+  test("non-allow matrix high risk deny is not cached", async () => {
     clearDynamicLists()
     const cacheScope = "workspace\0session\0prompt"
     let calls = 0
@@ -2125,8 +2171,8 @@ describe("classifier contract", () => {
       }),
     )
     expect(first).toEqual(reviewed("deny", "high", "medium", "High-impact action is only implied."))
-    expect(second).toEqual({ decision: "deny", reason: CACHED_DENY_REASON })
-    expect(calls).toBe(1)
+    expect(second).toEqual(reviewed("deny", "high", "medium", "High-impact action is only implied."))
+    expect(calls).toBe(2)
   })
 
   test("dynamic decisions are isolated by workspace session and prompt scope", async () => {

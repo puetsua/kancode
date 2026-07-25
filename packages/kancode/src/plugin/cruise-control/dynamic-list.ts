@@ -1,8 +1,9 @@
 /**
  * Per-prompt dynamic allow/deny action lists for cruise_control.
  *
- * Learned from successful classifier outcomes (after safety rails) so repeated
- * identical permission asks within the same user-prompt turn skip the LLM.
+ * Learned from successful low-risk classifier outcomes (after safety rails) so
+ * repeated identical permission asks within the same user-prompt turn skip the LLM.
+ * Medium/high risk judgments are not cached — they re-classify each time.
  * Scoped by workspace/session/prompt and cleared only for the affected session
  * on each new user prompt via the `chat.message` plugin hook.
  *
@@ -100,7 +101,7 @@ export function lookupDynamic(
 }
 
 /**
- * Remember a final binary decision after classifier + rails.
+ * Remember a final binary decision after classifier + rails when risk was low.
  * Removes the key from the opposite list.
  */
 export function rememberDynamic(

@@ -317,10 +317,11 @@ the tool and hints `/cruise-control-model` — it does not hard-deny. Optional
 The classifier LLM returns only `allow` or `deny`; the host may still escalate to ask
 on missing model, safety rails, timeout, or parse failure.
 
-Within a single user-prompt turn, successful allow/deny outcomes are remembered in an
+Within a single user-prompt turn, successful **low-risk** allow/deny outcomes are remembered in an
 in-memory dynamic list (`permission_modules.cruise_control.dynamic_list`, default on)
-so identical permission asks skip the LLM (`Cached allow` / `Cached deny`). The lists
-clear on each new user prompt (`chat.message`) and are not persisted to disk.
+so identical permission asks skip the LLM (`Cached allow` / `Cached deny`). Medium and high
+risk judgments are not cached and re-classify each time. The lists clear on each new user
+prompt (`chat.message`) and are not persisted to disk.
 
 By default (`parallel_classify: false` or omitted), concurrent cruise_control LLM classify
 calls are serialized so only one runs at a time when multiple tools need classification

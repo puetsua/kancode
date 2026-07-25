@@ -34,7 +34,7 @@ const IS_PREVIEW = CHANNEL !== "latest"
   const VERSION = await (async () => {
   if (env.OPENCODE_VERSION) return env.OPENCODE_VERSION
   if (IS_PREVIEW) return `0.0.0-${CHANNEL}-${new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "")}`
-  const version = await fetch("https://registry.npmjs.org/@puetsua/kancode/latest")
+  const version = await fetch("https://registry.npmjs.org/kancode/latest")
     .then((res) => {
       // First release: npm returns 404 for a package that does not exist yet.
       if (res.status === 404) return "0.0.0"

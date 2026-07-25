@@ -20,4 +20,4 @@ bun dev <directory>
 bun dev .
 ```
 
-The CLI package name is `kancode` (`@puetsua/kancode` on npm). For published installs, see the [root README](../README.md).
+The CLI package name is `kancode` on npm (unscoped, matching the `kancode-<platform>` binary packages). For published installs, see the [root README](../README.md).

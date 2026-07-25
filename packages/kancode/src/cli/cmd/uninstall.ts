@@ -1,7 +1,7 @@
 import type { Argv } from "yargs"
 import { UI } from "../ui"
 import * as prompts from "@clack/prompts"
-import { Installation } from "../../installation"
+import { Installation, NPM_PACKAGE } from "../../installation"
 import { Global } from "@kancode/core/global"
 import fs from "fs/promises"
 import path from "path"
@@ -129,10 +129,10 @@ async function showRemovalSummary(targets: RemovalTargets, method: Installation.
 
   if (method !== "curl" && method !== "unknown") {
     const cmds: Record<string, string> = {
-      npm: "npm uninstall -g @puetsua/kancode",
-      pnpm: "pnpm uninstall -g @puetsua/kancode",
-      bun: "bun remove -g @puetsua/kancode",
-      yarn: "yarn global remove @puetsua/kancode",
+      npm: `npm uninstall -g ${NPM_PACKAGE}`,
+      pnpm: `pnpm uninstall -g ${NPM_PACKAGE}`,
+      bun: `bun remove -g ${NPM_PACKAGE}`,
+      yarn: `yarn global remove ${NPM_PACKAGE}`,
       brew: "brew uninstall kancode",
       choco: "choco uninstall kancode",
       scoop: "scoop uninstall kancode",
@@ -180,10 +180,10 @@ async function executeUninstall(method: Installation.Method, targets: RemovalTar
 
   if (method !== "curl" && method !== "unknown") {
     const cmds: Record<string, string[]> = {
-      npm: ["npm", "uninstall", "-g", "@puetsua/kancode"],
-      pnpm: ["pnpm", "uninstall", "-g", "@puetsua/kancode"],
-      bun: ["bun", "remove", "-g", "@puetsua/kancode"],
-      yarn: ["yarn", "global", "remove", "@puetsua/kancode"],
+      npm: ["npm", "uninstall", "-g", NPM_PACKAGE],
+      pnpm: ["pnpm", "uninstall", "-g", NPM_PACKAGE],
+      bun: ["bun", "remove", "-g", NPM_PACKAGE],
+      yarn: ["yarn", "global", "remove", NPM_PACKAGE],
       brew: ["brew", "uninstall", "kancode"],
       choco: ["choco", "uninstall", "kancode"],
       scoop: ["scoop", "uninstall", "kancode"],

@@ -1,5 +1,4 @@
 import {
-  isModelGenerateError,
   type ModelCapability,
   type ModelMessage,
   type PermissionModuleDecideInput,
@@ -766,6 +765,19 @@ export async function runClassifier(input: {
 }
 
 /**
+ * Duck-typed rather than using `isModelGenerateError` from `@kancode/plugin`,
+ * which would make that package a *runtime* dependency. Keeping it types-only
+ * lets the standalone plugin ship with no runtime dependencies at all.
+ */
+function isNoObjectError(error: unknown): error is { code: string; text?: string } {
+  return (
+    error instanceof Error &&
+    error.name === "ModelGenerateError" &&
+    (error as { code?: unknown }).code === "no_object"
+  )
+}
+
+/**
  * Classify through the public plugin model capability. The host validates only
  * against the raw JSON Schema, so normalization and lenient recovery from
  * near-miss output stay here rather than crossing the plugin boundary.
@@ -790,7 +802,7 @@ async function generateClassifierObject(input: {
     if (!parsed) throw new Error("invalid classifier result")
     return parsed
   } catch (error) {
-    if (isModelGenerateError(error) && error.code === "no_object") {
+    if (isNoObjectError(error)) {
       const recovered = parseClassifierResult(error.text)
       if (recovered) return recovered
     }

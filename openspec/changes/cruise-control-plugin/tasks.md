@@ -48,13 +48,13 @@
 
 ## 6. Extract And Publish The Plugin
 
-- [ ] 6.1 Create the `@puetsua/kancode-cruise-control` repository and copy the portable classifier sources
-- [ ] 6.2 Add separate `src/server.ts` and `src/tui.tsx` entrypoints — a single module must never export both `server` and `tui`
-- [ ] 6.3 Move the `/cruise-control-model` command builder out of the TUI package into the plugin's TUI entry
-- [ ] 6.4 Configure `package.json`: `exports["./server"]` with default options under `.config`, `exports["./tui"]`, `files` matching `exports`, compiled `dist`, the compatibility range, and `@kancode/plugin` as a peer dependency
-- [ ] 6.5 Port the pure-logic tests (parsing, safety rails, instruction rendering, destructive rails, dynamic lists, managed-directory and session-scope allows, approval intent, classifier orchestration)
-- [ ] 6.6 Verify manually against a local global config with the in-tree copy disabled: the module registers, classification works, and the command sets the model
-- [ ] 6.7 Publish `0.1.0`
+- [x] 6.1 Create the `@puetsua/kancode-cruise-control` repository and copy the portable classifier sources
+- [x] 6.2 Add separate `src/server.ts` and `src/tui.tsx` entrypoints — a single module must never export both `server` and `tui`
+- [ ] 6.3 (deferred) Move `/cruise-control-model` into a TUI entry — blocked: the builder depends on internal TUI components (DialogModel, useSDK/useSync contexts) that the TUI plugin API does not expose. It only edits config, so it stays host-side for now.
+- [x] 6.4 Configure `package.json`: `exports["./server"]` with default options under `.config`, `exports["./tui"]`, `files` matching `exports`, compiled `dist`, the compatibility range, and `@kancode/plugin` as a peer dependency
+- [x] 6.5 Port the pure-logic tests (parsing, safety rails, instruction rendering, destructive rails, dynamic lists, managed-directory and session-scope allows, approval intent, classifier orchestration)
+- [x] 6.6 Verify manually against a local global config with the in-tree copy disabled: the module registers, classification works, and the command sets the model
+- [ ] 6.7 Publish `0.1.0` — blocked on npm auth (`npm whoami` returns 401); repo and tarball are ready
 
 ## 7. Seed By Default And Remove The In-Tree Copy
 

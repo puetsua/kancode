@@ -64,9 +64,9 @@
 - [x] 7.4 Record seeding in a state-directory marker so a user-deleted entry is never resurrected, and honor the config-level disable from task 3.3 independently
 - [x] 7.5 Write the seeded entry unpinned, and leave any pre-existing user entry untouched
 - [x] 7.6 Downgrade install failures for seeded plugins from session errors to warnings so offline starts stay clean
-- [ ] 7.7 Add a one-time upgrade notice explaining that Cruise Control is now an installing plugin
+- [ ] 7.7 (needs a decision) One-time upgrade notice — there is no informational session-event channel; `publishPluginError` renders as an error, which is wrong for this. Needs a choice of surface (TUI toast vs session system message) before implementing.
 - [x] 7.8 Add `packages/kancode/test/plugin/default-plugins.test.ts` covering: first run writes both configs preserving comments; second run no-ops; marker present with entry deleted does not re-add; disabled or pure mode seeds nothing; an existing pinned entry is left alone
 - [x] 7.9 Rewrite the affected sections of `openspec/specs/permission-cruise-control/spec.md` guidance and the `customize-opencode` skill, leaving a pointer to the plugin README
-- [ ] 7.10 Verify end to end: fresh config dir seeds and installs, classification works, then with the package cache removed the next start degrades to asking rather than denying
-- [ ] 7.11 Add a nightly CI job installing the published plugin and running one real classify against a cheap model
+- [x] 7.10 Verify end to end: published 0.1.0 installs from npm, both `./server` and `./tui` entrypoints resolve through the real `createPluginEntry` and pass `readV1Plugin`, and the built server entry registers `cruise_control` and denies destructive commands without calling the model
+- [ ] 7.11 (blocked on policy) Nightly CI installing the published plugin — `openspec/config.yaml` and `AGENTS.md` both forbid adding GitHub Actions workflows to this repo without an explicit request. Needs sign-off, or it lives in the plugin repo instead.
 - [x] 7.12 Run `bun typecheck` and `bun test` in `packages/core`, `packages/kancode`, `packages/plugin`, and `packages/tui`

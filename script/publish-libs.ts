@@ -19,6 +19,12 @@ import { tmpdir } from "os"
 import path from "path"
 
 const DRY_RUN = process.argv.includes("--dry-run")
+/**
+ * npm requires a one-time password per publish when 2FA is on, and prompts for
+ * it on a TTY that is not available here. Pass `--otp=123456`, or configure an
+ * automation token in ~/.npmrc, which bypasses 2FA for publishing entirely.
+ */
+const OTP = process.argv.find((arg) => arg.startsWith("--otp="))?.slice("--otp=".length)
 // sdk first: plugin's manifest pins the sdk version it was packed against.
 const PACKAGES = ["packages/sdk/js", "packages/plugin"]
 
@@ -45,7 +51,8 @@ for (const dir of PACKAGES) {
       console.log("  dry run, not publishing")
       continue
     }
-    await $`npm publish ${tarball} --access public`.cwd(staging)
+    const args = ["publish", tarball, "--access", "public", ...(OTP ? ["--otp", OTP] : [])]
+    await $`npm ${args}`.cwd(staging)
     console.log(`  published`)
   } finally {
     await rm(staging, { recursive: true, force: true })

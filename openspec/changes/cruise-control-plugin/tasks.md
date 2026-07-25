@@ -54,7 +54,7 @@
 - [x] 6.4 Configure `package.json`: `exports["./server"]` with default options under `.config`, `exports["./tui"]`, `files` matching `exports`, compiled `dist`, the compatibility range, and `@kancode/plugin` as a peer dependency
 - [x] 6.5 Port the pure-logic tests (parsing, safety rails, instruction rendering, destructive rails, dynamic lists, managed-directory and session-scope allows, approval intent, classifier orchestration)
 - [x] 6.6 Verify manually against a local global config with the in-tree copy disabled: the module registers, classification works, and the command sets the model
-- [ ] 6.7 Publish `0.1.0` — blocked on npm auth (`npm whoami` returns 401); repo and tarball are ready
+- [x] 6.7 Publish `0.1.0` — published by the user; verified end to end by installing from npm and resolving both entrypoints through the host loader. 0.1.1 is committed and awaiting a tag.
 
 ## 7. Seed By Default And Remove The In-Tree Copy
 

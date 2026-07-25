@@ -33,6 +33,7 @@ import type { WorkspaceAdapter } from "@/control-plane/types"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { InstallationChannel } from "@kancode/core/installation/version"
+import { Global } from "@kancode/core/global"
 import { PermissionModule } from "@kancode/core/permission/module"
 import * as Option from "effect/Option"
 
@@ -150,14 +151,32 @@ function getLegacyPlugins(mod: Record<string, unknown>) {
   return result
 }
 
-async function applyPlugin(load: PluginLoader.Loaded, input: PluginInput, hooks: Hooks[]) {
+/**
+ * Explicit `plugin_enabled` overrides keyed by plugin id. Plugins are enabled by
+ * default; only `false` suppresses one. Mirrors the TUI's `plugin_enabled` so a
+ * user opt-out survives independently of whether the plugin is still listed.
+ */
+function pluginDisabled(enabled: Record<string, boolean> | undefined, id: string) {
+  return enabled?.[id] === false
+}
+
+async function applyPlugin(
+  load: PluginLoader.Loaded,
+  input: PluginInput,
+  hooks: Hooks[],
+  enabled: Record<string, boolean> | undefined,
+) {
   const plugin = readV1Plugin(load.mod, load.spec, "server", "detect")
   if (plugin) {
-    await resolvePluginId(load.source, load.spec, load.target, readPluginId(plugin.id, load.spec), load.pkg)
+    const id = await resolvePluginId(load.source, load.spec, load.target, readPluginId(plugin.id, load.spec), load.pkg)
+    if (pluginDisabled(enabled, id)) return
     hooks.push(await (plugin as PluginModule).server(input, load.options))
     return
   }
 
+  // Legacy plugins export bare functions with no id, so they cannot be addressed
+  // by `plugin_enabled`; fall back to the package/path spec.
+  if (pluginDisabled(enabled, load.spec)) return
   for (const server of getLegacyPlugins(load.mod)) {
     hooks.push(await server(input, load.options))
   }
@@ -191,11 +210,19 @@ const layer = Layer.effect(
         })
         const cfg = yield* config.get()
         const modules = yield* Effect.serviceOption(PermissionModule.Service)
+        const global = yield* Global.Service
         const input: PluginInput = {
           client,
           project: ctx.project,
           worktree: ctx.worktree,
           directory: ctx.directory,
+          paths: {
+            config: global.config,
+            data: global.data,
+            cache: global.cache,
+            state: global.state,
+            tmp: global.tmp,
+          },
           experimental_workspace: {
             register(type: string, adapter: PluginWorkspaceAdapter) {
               registerAdapter(ctx.project.id, type, adapter as WorkspaceAdapter)
@@ -302,7 +329,7 @@ const layer = Layer.effect(
           // Keep plugin execution sequential so hook registration and execution
           // order remains deterministic across plugin runs.
           yield* Effect.tryPromise({
-            try: () => applyPlugin(load, input, hooks),
+            try: () => applyPlugin(load, input, hooks, cfg.plugin_enabled),
             catch: (err) => {
               const message = errorMessage(err)
               return message
@@ -397,7 +424,7 @@ const layer = Layer.effect(
 export const node = LayerNode.make({
   service: Service,
   layer: layer,
-  deps: [EventV2Bridge.node, Config.node, RuntimeFlags.node],
+  deps: [EventV2Bridge.node, Config.node, RuntimeFlags.node, Global.node],
 })
 
 export * as Plugin from "."

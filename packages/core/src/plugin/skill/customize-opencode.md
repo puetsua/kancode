@@ -392,17 +392,29 @@ model: anthropic/claude-sonnet-4-6
 ```
 
 Auto-discovered plugins (no config entry needed): any `*.ts` or `*.js` file in
-`.opencode/plugin/` or `.opencode/plugins/`.
+`.kancode/plugin/` or `.kancode/plugins/`.
+
+`plugin_enabled` is an optional map of explicit per-plugin overrides keyed by
+plugin id. Plugins are enabled by default, so only `false` is meaningful — use
+it to keep a plugin from loading without removing its `plugin` entry:
+
+```json
+"plugin_enabled": { "puetsua.cruise-control": false }
+```
 
 A plugin module exports `default` (or any named export) of type
 `Plugin = (input: PluginInput, options?) => Promise<Hooks>`. The export is a
 function, not a plain object literal, and the function returns an object
 (return `{}` if there is nothing to register).
 
+`input.paths` carries the resolved KanCode app roots (`config`, `data`,
+`cache`, `state`, `tmp`) so a plugin can reason about managed directories
+without importing host internals.
+
 ```ts
 import type { Plugin } from "@kancode/plugin"
 
-export default (async ({ client, project, directory, $, permission }) => {
+export default (async ({ client, project, directory, paths, $, permission }) => {
   permission.registerModule({
     id: "puetsua_permit",
     decide: async ({ permission: key, patterns, metadata }) => {

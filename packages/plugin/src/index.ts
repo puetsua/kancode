@@ -87,11 +87,25 @@ export type PermissionModuleRegistration = {
   decide: (input: PermissionModuleDecideInput) => Promise<PermissionModuleDecision>
 }
 
+/**
+ * Resolved KanCode user-scope application roots. Exposed so plugins can reason
+ * about managed app directories without importing host-internal packages.
+ */
+export type PluginPaths = {
+  readonly config: string
+  readonly data: string
+  readonly cache: string
+  readonly state: string
+  readonly tmp: string
+}
+
 export type PluginInput = {
   client: ReturnType<typeof createOpencodeClient>
   project: Project
   directory: string
   worktree: string
+  /** Resolved KanCode config/data/cache/state/tmp roots. */
+  paths: PluginPaths
   experimental_workspace: {
     register(type: string, adapter: WorkspaceAdapter): void
   }

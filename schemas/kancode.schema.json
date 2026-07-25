@@ -1045,6 +1045,13 @@
             ]
           }
         },
+        "plugin_enabled": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "boolean"
+          },
+          "description": "Explicit per-plugin enable/disable overrides keyed by plugin id. Plugins are enabled by default; set a plugin id to false to keep it from loading."
+        },
         "autoupdate": {
           "anyOf": [
             {

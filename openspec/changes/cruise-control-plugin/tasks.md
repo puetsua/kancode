@@ -16,11 +16,11 @@
 
 ## 3. Plugin Paths And Server-Side Enablement
 
-- [ ] 3.1 Add `paths: { config, data, cache, state, tmp }` to `PluginInput` in `packages/plugin/src/index.ts`
-- [ ] 3.2 Populate `paths` from the resolved global paths when constructing `PluginInput` in `packages/kancode/src/plugin/index.ts`
-- [ ] 3.3 Add a server-side plugin enable/disable check before `applyPlugin`, mirroring the TUI's `plugin_enabled`, and extend the config schema for it
-- [ ] 3.4 Add tests: a disabled plugin id is skipped and registers nothing; `paths` reaches an externally loaded plugin
-- [ ] 3.5 Run `bun typecheck` and `bun test` in `packages/plugin` and `packages/kancode`
+- [x] 3.1 Add `paths: { config, data, cache, state, tmp }` to `PluginInput` in `packages/plugin/src/index.ts`
+- [x] 3.2 Populate `paths` from the resolved global paths when constructing `PluginInput` in `packages/kancode/src/plugin/index.ts`
+- [x] 3.3 Add a server-side plugin enable/disable check before `applyPlugin`, mirroring the TUI's `plugin_enabled`, and extend the config schema for it
+- [x] 3.4 Add tests: a disabled plugin id is skipped and registers nothing; `paths` reaches an externally loaded plugin
+- [x] 3.5 Run `bun typecheck` and `bun test` in `packages/plugin` and `packages/kancode`
 
 ## 4. Plugin Model Capability
 

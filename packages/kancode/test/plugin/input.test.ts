@@ -213,4 +213,41 @@ describe("plugin_enabled", () => {
       }),
     ),
   )
+
+  // Legacy plugins export a bare function with no id, so they can only be
+  // addressed by the spec string the user wrote in `plugin`.
+  const LEGACY = [
+    "export const hook = async () => ({",
+    `  ${JSON.stringify(systemHook)}: (_i, output) => {`,
+    '    output.system.push("legacy")',
+    "  },",
+    "})",
+    "",
+  ].join("\n")
+
+  it.instance("loads a legacy bare-function plugin", () =>
+    withProject(
+      LEGACY,
+      {},
+      Effect.gen(function* () {
+        expect(yield* triggerSystemTransform()).toEqual(["legacy"])
+      }),
+    ),
+  )
+
+  it.instance("disables a legacy plugin by its spec string", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const file = path.join(test.directory, "plugin.ts")
+      const spec = pathToFileURL(file).href
+      yield* Effect.promise(() => Bun.write(file, LEGACY))
+      yield* Effect.promise(() =>
+        Bun.write(
+          path.join(test.directory, "kancode.json"),
+          JSON.stringify({ plugin: [spec], plugin_enabled: { [spec]: false } }, null, 2),
+        ),
+      )
+      expect(yield* triggerSystemTransform()).toEqual([])
+    }),
+  )
 })

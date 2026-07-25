@@ -277,8 +277,13 @@ const layer = Layer.effect(
         }
 
         for (const plugin of flags.disableDefaultPlugins ? [] : internalPlugins(flags)) {
+          // Addressable as `internal:<name>` in `plugin_enabled`, matching the ids
+          // the TUI already uses in its own map. Without this a user writing
+          // `internal:copilot-auth: false` gets silence rather than an opt-out.
+          const internalID = `internal:${plugin.name || "anonymous"}`
+          if (pluginDisabled(cfg.plugin_enabled, internalID)) continue
           const init = yield* Effect.tryPromise({
-            try: () => plugin({ ...input, model: modelFor(`internal:${plugin.name || "anonymous"}`) }),
+            try: () => plugin({ ...input, model: modelFor(internalID) }),
             catch: errorMessage,
           }).pipe(
             Effect.tapError((error) => Effect.logError("failed to load internal plugin", { name: plugin.name, error })),

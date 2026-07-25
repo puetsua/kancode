@@ -50,7 +50,7 @@
 
 - [x] 6.1 Create the `@puetsua/kancode-cruise-control` repository and copy the portable classifier sources
 - [x] 6.2 Add separate `src/server.ts` and `src/tui.tsx` entrypoints — a single module must never export both `server` and `tui`
-- [ ] 6.3 (deferred) Move `/cruise-control-model` into a TUI entry — blocked: the builder depends on internal TUI components (DialogModel, useSDK/useSync contexts) that the TUI plugin API does not expose. It only edits config, so it stays host-side for now.
+- [x] 6.3 Move `/cruise-control-model` into the plugin's TUI entry — required exposing `DialogModel` on the TUI plugin UI API so the picker UX is unchanged
 - [x] 6.4 Configure `package.json`: `exports["./server"]` with default options under `.config`, `exports["./tui"]`, `files` matching `exports`, compiled `dist`, the compatibility range, and `@kancode/plugin` as a peer dependency
 - [x] 6.5 Port the pure-logic tests (parsing, safety rails, instruction rendering, destructive rails, dynamic lists, managed-directory and session-scope allows, approval intent, classifier orchestration)
 - [x] 6.6 Verify manually against a local global config with the in-tree copy disabled: the module registers, classification works, and the command sets the model

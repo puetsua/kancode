@@ -93,6 +93,8 @@ export const Definitions = {
   session_fork: keybind("none", "Fork session from message"),
   session_rename: keybind("ctrl+r", "Rename session"),
   session_title_model: keybind("none", "Set session title model"),
+  // Command id is registered by the cruise-control plugin, not the host; the
+  // slot stays so an existing user binding keeps resolving once it is installed.
   permission_cruise_control_model: keybind("none", "Set Cruise Control classifier model"),
   session_delete: keybind("ctrl+d", "Delete session"),
   session_interrupt: keybind("escape", "Interrupt current session"),

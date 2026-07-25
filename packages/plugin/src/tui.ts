@@ -180,6 +180,16 @@ export type TuiDialogSelectProps<Value = unknown> = {
   current?: Value
 }
 
+export type TuiDialogModelProps = {
+  /** Open the picker focused on this provider. */
+  providerID?: string
+  title?: string
+  current?: { providerID: string; modelID: string }
+  /** Shown in the title bar when `current` is unset — config pickers use "unset". */
+  currentFallback?: string
+  onSelect?: (providerID: string, modelID: string) => void | Promise<void>
+}
+
 export type TuiPromptInfo = {
   input: string
   mode?: "normal" | "shell"
@@ -601,6 +611,8 @@ export type TuiPluginApi = {
     DialogConfirm: (props: TuiDialogConfirmProps) => JSX.Element
     DialogPrompt: (props: TuiDialogPromptProps) => JSX.Element
     DialogSelect: <Value = unknown>(props: TuiDialogSelectProps<Value>) => JSX.Element
+    /** Provider/model picker, so plugins that store a model ref get the host's own UX. */
+    DialogModel: (props: TuiDialogModelProps) => JSX.Element
     Slot: <Name extends string>(props: TuiSlotProps<Name>) => JSX.Element | null
     Prompt: (props: TuiPromptProps) => JSX.Element
     toast: (input: TuiToast) => void

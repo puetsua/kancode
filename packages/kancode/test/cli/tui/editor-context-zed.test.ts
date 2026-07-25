@@ -148,7 +148,7 @@ test("isZedRunning is false when no Zed process is listed", () => {
     exitCode: 1,
     stdout: Buffer.from(""),
     stderr: Buffer.from(""),
-  })) as typeof Bun.spawnSync)
+  })) as unknown as typeof Bun.spawnSync)
 
   try {
     expect(isZedRunning()).toBeFalse()
@@ -163,8 +163,7 @@ test("isZedRunning is true when a Zed process is listed", () => {
   const spawn = spyOn(Bun, "spawnSync").mockImplementation((() =>
     process.platform === "win32"
       ? { exitCode: 0, stdout: Buffer.from("zed.exe                     1234 Console"), stderr: Buffer.from("") }
-      : { exitCode: 0, stdout: Buffer.from("1234\n"), stderr: Buffer.from("") },
-  ) as typeof Bun.spawnSync)
+      : { exitCode: 0, stdout: Buffer.from("1234\n"), stderr: Buffer.from("") }) as unknown as typeof Bun.spawnSync)
 
   try {
     expect(isZedRunning()).toBeTrue()

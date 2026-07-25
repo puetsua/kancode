@@ -1,26 +1,61 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
   "name": "@kancode/sdk",
-  "version": "1.17.20",
+  "version": "0.1.0",
   "type": "module",
   "license": "MIT",
   "scripts": {
     "test": "bun test",
     "typecheck": "tsgo --noEmit",
-    "build": "bun ./script/build.ts"
+    "build": "bun ./script/build.ts",
+    "prepublishOnly": "bun tsc"
   },
   "exports": {
-    ".": "./src/index.ts",
-    "./client": "./src/client.ts",
-    "./server": "./src/server.ts",
-    "./v2": "./src/v2/index.ts",
-    "./v2/client": "./src/v2/client.ts",
-    "./v2/gen/client": "./src/v2/gen/client/index.ts",
-    "./v2/server": "./src/v2/server.ts",
-    "./v2/types": "./src/v2/gen/types.gen.ts"
+    ".": {
+      "bun": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./client": {
+      "bun": "./src/client.ts",
+      "types": "./dist/client.d.ts",
+      "import": "./dist/client.js"
+    },
+    "./server": {
+      "bun": "./src/server.ts",
+      "types": "./dist/server.d.ts",
+      "import": "./dist/server.js"
+    },
+    "./v2": {
+      "bun": "./src/v2/index.ts",
+      "types": "./dist/v2/index.d.ts",
+      "import": "./dist/v2/index.js"
+    },
+    "./v2/client": {
+      "bun": "./src/v2/client.ts",
+      "types": "./dist/v2/client.d.ts",
+      "import": "./dist/v2/client.js"
+    },
+    "./v2/gen/client": {
+      "bun": "./src/v2/gen/client/index.ts",
+      "types": "./dist/v2/gen/client/index.d.ts",
+      "import": "./dist/v2/gen/client/index.js"
+    },
+    "./v2/server": {
+      "bun": "./src/v2/server.ts",
+      "types": "./dist/v2/server.d.ts",
+      "import": "./dist/v2/server.js"
+    },
+    "./v2/types": {
+      "bun": "./src/v2/gen/types.gen.ts",
+      "types": "./dist/v2/gen/types.gen.d.ts",
+      "import": "./dist/v2/gen/types.gen.js"
+    },
+    "./package.json": "./package.json"
   },
   "files": [
-    "dist"
+    "dist",
+    "src"
   ],
   "devDependencies": {
     "@hey-api/openapi-ts": "0.90.10",
@@ -32,5 +67,14 @@
   },
   "dependencies": {
     "cross-spawn": "catalog:"
+  },
+  "description": "TypeScript SDK for the KanCode server API.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/puetsua/kancode.git",
+    "directory": "packages/sdk/js"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

@@ -214,6 +214,35 @@ describe("plugin_enabled", () => {
     ),
   )
 
+  // Two identically-named, identically-shaped maps exist: this one in
+  // kancode.json and the TUI's in tui.json. They govern different plugin
+  // runtimes, so neither may reach across.
+  it.instance("ignores the TUI's separate plugin_enabled map", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const file = path.join(test.directory, "plugin.ts")
+      yield* Effect.all(
+        [
+          Effect.promise(() => Bun.write(file, REPORTER)),
+          Effect.promise(() =>
+            Bun.write(
+              path.join(test.directory, "kancode.json"),
+              JSON.stringify({ plugin: [pathToFileURL(file).href] }, null, 2),
+            ),
+          ),
+          Effect.promise(() =>
+            Bun.write(
+              path.join(test.directory, "tui.json"),
+              JSON.stringify({ plugin_enabled: { [PLUGIN_ID]: false } }, null, 2),
+            ),
+          ),
+        ],
+        { discard: true, concurrency: 3 },
+      )
+      expect(yield* triggerSystemTransform()).toHaveLength(1)
+    }),
+  )
+
   // Legacy plugins export a bare function with no id, so they can only be
   // addressed by the spec string the user wrote in `plugin`.
   const LEGACY = [

@@ -37,6 +37,19 @@ export const MODULE_REVIEW_DETAIL_KEY = "cruise_control_review"
 /** Metadata keys preserved across tool completion so a review survives the tool's own output. */
 export const MODULE_REVIEW_METADATA_KEYS = [MODULE_REVIEW_SUMMARY_KEY, MODULE_REVIEW_DETAIL_KEY] as const
 
+/**
+ * Picks the module-review keys out of a running tool part's metadata so they can
+ * be re-applied after the tool completes — the tool's own output never carries
+ * them. Each key survives independently: a detail without a summary is still
+ * worth keeping, and values are passed through verbatim rather than type-checked,
+ * since a malformed third-party review should be visible, not silently dropped.
+ */
+export function preserveModuleReview(previous: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    MODULE_REVIEW_METADATA_KEYS.filter((key) => previous[key] !== undefined).map((key) => [key, previous[key]]),
+  )
+}
+
 export interface AskResult {
   /** Short module conclusion when a tool was auto-allowed. */
   conclusion?: string

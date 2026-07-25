@@ -1281,6 +1281,54 @@ describe("classifier contract", () => {
     expect(managedAppDirectoryAllow("read", [configGlob], Global.Path)).toBeUndefined()
   })
 
+  describe("preserveModuleReview", () => {
+    const review = { risk: "low", intent: "medium", reason: "safe" }
+
+    test("keeps both review keys across tool completion", () => {
+      expect(
+        Permission.preserveModuleReview({ cruise_control: "Risk: low", cruise_control_review: review, other: 1 }),
+      ).toEqual({ cruise_control: "Risk: low", cruise_control_review: review })
+    })
+
+    test("keeps each key independently", () => {
+      // Previously the detail was dropped unless a string summary was also present.
+      expect(Permission.preserveModuleReview({ cruise_control_review: review })).toEqual({
+        cruise_control_review: review,
+      })
+      expect(Permission.preserveModuleReview({ cruise_control: "Risk: low" })).toEqual({
+        cruise_control: "Risk: low",
+      })
+    })
+
+    test("passes malformed values through instead of dropping them", () => {
+      // A broken third-party review should be visible, not silently discarded.
+      expect(Permission.preserveModuleReview({ cruise_control: 42 })).toEqual({ cruise_control: 42 })
+    })
+
+    test("returns nothing when no review is present", () => {
+      expect(Permission.preserveModuleReview({ title: "ls", output: "x" })).toEqual({})
+    })
+
+    test("a preserved review wins over a same-named tool metadata key", () => {
+      const toolMetadata = { cruise_control: "from tool" }
+      const preserved = Permission.preserveModuleReview({ cruise_control: "from module" })
+      // Mirrors the spread order in SessionProcessor.completeToolCall.
+      expect({ ...toolMetadata, ...preserved }).toEqual({ cruise_control: "from module" })
+    })
+  })
+
+  test("managed directory containment rejects sibling prefixes and traversal", () => {
+    const root = path.join(Global.Path.config, "kc-contains")
+    const paths = { ...TEST_PATHS, config: root }
+    expect(isManagedAppDirectoryPattern(root, paths)).toBe(true)
+    expect(isManagedAppDirectoryPattern(path.join(root, "nested", "deep"), paths)).toBe(true)
+    // `<root>-sibling` shares a string prefix with `<root>` but is not inside it.
+    expect(isManagedAppDirectoryPattern(`${root}-sibling`, paths)).toBe(false)
+    expect(isManagedAppDirectoryPattern(path.join(root, "..", "escaped"), paths)).toBe(false)
+    expect(isManagedAppDirectoryPattern(path.join(root, "sub", "..", "..", "escaped"), paths)).toBe(false)
+    expect(isManagedAppDirectoryPattern(path.dirname(root), paths)).toBe(false)
+  })
+
   test("managed app directories follow the supplied paths, not the host globals", () => {
     const paths = { config: "/custom/cfg", data: "/custom/data", cache: "/c", state: "/s", tmp: "/t" }
     expect(isManagedAppDirectoryPattern("/custom/cfg/agents", paths)).toBe(true)

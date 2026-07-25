@@ -21,7 +21,7 @@
 ### Install
 
 ```bash
-npm i -g kancode
+npm i -g @kancode/cli
 ```
 
 Then start the TUI:

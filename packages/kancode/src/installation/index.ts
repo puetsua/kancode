@@ -25,11 +25,14 @@ export type ReleaseType = "patch" | "minor" | "major"
  * installed CLI polls it for updates. A mismatch between publish name and this
  * constant silently breaks self-update, so a test asserts they agree.
  *
- * Unscoped, matching the per-platform `kancode-<platform>` packages and the
- * Homebrew/Scoop/Choco feed names (not published yet, kept consistent for when
- * they are). Legacy installs from `@puetsua/kancode` are bridged at publish time.
+ * Scoped, and not by preference: npm rejects the unscoped `kancode` as too
+ * similar to the existing `keycode` package, so the name is unobtainable. The
+ * scope also puts the app in the same org as the libraries. The per-platform
+ * `kancode-<platform>` packages stay unscoped — they published before the
+ * filter had anything to catch, and postinstall resolves them by those names.
+ * Legacy installs from `@puetsua/kancode` are bridged at publish time.
  */
-export const NPM_PACKAGE = "kancode"
+export const NPM_PACKAGE = "@kancode/cli"
 const GITHUB_REPO = "puetsua/kancode"
 const BIN_NAME = "kancode"
 

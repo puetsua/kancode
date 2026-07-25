@@ -21,7 +21,7 @@
 ### 安裝
 
 ```bash
-npm i -g kancode
+npm i -g @kancode/cli
 ```
 
 接著啟動 TUI：

@@ -31,7 +31,7 @@ Repo-wide principles only. Package-level `AGENTS.md` owns package detail; `opens
 
 ## Release
 
-- npm names: app is unscoped **`kancode`**; libraries are **`@kancode/*`** and publish under the name they are imported by — never remap a library at publish time, emitted `.d.ts` cross-references cannot follow. Platform binaries stay unscoped `kancode-<platform>`.
+- npm names: app publishes as **`@kancode/cli`** — unscoped `kancode` is unobtainable, npm's similarity filter rejects it against `keycode`; libraries are **`@kancode/*`** and publish under the name they are imported by — never remap a library at publish time, emitted `.d.ts` cross-references cannot follow. Platform binaries stay unscoped `kancode-<platform>`.
 - `@kancode/sdk` and `@kancode/plugin` release together, sdk first: `workspace:*` pins plugin -> sdk at pack time. Pack with `bun pm pack` and publish the tarball — never `npm publish` from a library directory, which uploads bun's `workspace:`/`catalog:` protocols verbatim and makes the package uninstallable (EUNSUPPORTEDPROTOCOL).
 - Legacy `@puetsua/kancode` stays published as a deprecated bridge; do not unpublish it or old lockfiles break.
 
@@ -41,7 +41,7 @@ Repo-wide principles only. Package-level `AGENTS.md` owns package detail; `opens
   - **minor** (`x.Y+1.0`) — new user-facing features (`feat`), even if fixes are included
   - **major** (`X+1.0.0`) — breaking changes
 - Do not invent a parallel version line (ignore upstream OpenCode `v1.x` tags/releases). Next tag = last KanCode tag + the bump above.
-- After pushing a release tag, watch `.github/workflows/release.yml` until it succeeds; confirm the GitHub release and `npm view kancode version`.
+- After pushing a release tag, watch `.github/workflows/release.yml` until it succeeds; confirm the GitHub release and `npm view @kancode/cli version`.
 
 ## Code
 

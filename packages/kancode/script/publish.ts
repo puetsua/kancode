@@ -8,11 +8,11 @@ import { fileURLToPath } from "url"
 const dir = fileURLToPath(new URL("..", import.meta.url))
 process.chdir(dir)
 
-// Workspace package is `@kancode/cli`; npm distribution is the unscoped
-// `kancode` with a `kancode` bin, matching the per-platform `kancode-<platform>`
-// packages. Must equal Installation.NPM_PACKAGE or self-update breaks — asserted
-// by packages/kancode/test/installation/publish-name.test.ts.
-const publishName = "kancode"
+// Published under the workspace name, `@kancode/cli`, with a `kancode` bin. The
+// unscoped `kancode` is not available: npm's similarity filter rejects it against
+// the existing `keycode`. Must equal Installation.NPM_PACKAGE or self-update
+// breaks — asserted by packages/kancode/test/installation/publish-name.test.ts.
+const publishName = "@kancode/cli"
 const binName = Object.keys(pkg.bin ?? {})[0] ?? "kancode"
 
 async function published(name: string, version: string) {

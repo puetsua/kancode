@@ -20,4 +20,4 @@ bun dev <directory>
 bun dev .
 ```
 
-The CLI package name is `kancode` on npm (unscoped, matching the `kancode-<platform>` binary packages). For published installs, see the [root README](../README.md).
+The CLI publishes as `@kancode/cli` on npm — the unscoped `kancode` is unobtainable, npm rejects it as too similar to `keycode`. The binary it installs is still `kancode`, as are the `kancode-<platform>` packages behind it. For published installs, see the [root README](../README.md).

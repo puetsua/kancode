@@ -177,12 +177,6 @@ const layer = Layer.effect(
             modules: [...moduleIDs],
             permission: request.permission,
           })
-          if (moduleIDs.has(PermissionModuleSchema.CRUISE_CONTROL)) {
-            return yield* new PermissionV1.DeniedError({
-              ruleset: ruleset.filter((rule) => Wildcard.match(request.permission, rule.permission)),
-              reason: "Cruise control is unavailable; denied",
-            })
-          }
           needsAsk = true
           metadata = {
             ...metadata,

@@ -155,12 +155,44 @@ describe("permission modules", () => {
         })
 
         unregisterA()
-        expect(yield* modules.decide({ ...input, scope: "workspace-a" })).toEqual({ decision: "deny" })
+        expect(yield* modules.decide({ ...input, scope: "workspace-a" })).toEqual({
+          decision: "ask",
+          reason: 'Permission module "scoped" is not available; approve manually.',
+        })
         expect(yield* modules.decide({ ...input, scope: "workspace-b" })).toEqual({
           decision: "allow",
           reason: "workspace b",
         })
         unregisterB()
+      }).pipe(Effect.provide(PermissionModule.layer)),
+    )
+  })
+
+  test("unregistered module asks and names the module", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const modules = yield* PermissionModule.Service
+        expect(
+          yield* modules.decide({ moduleID: "not_a_real_module", permission: "bash", patterns: ["ls"], metadata: {} }),
+        ).toEqual({
+          decision: "ask",
+          reason: 'Permission module "not_a_real_module" is not available; approve manually.',
+        })
+      }).pipe(Effect.provide(PermissionModule.layer)),
+    )
+  })
+
+  test("registered module that throws still fails closed to deny", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const modules = yield* PermissionModule.Service
+        modules.registerSync({
+          id: "boom",
+          decide: () => Effect.succeed("nonsense" as never),
+        })
+        expect(
+          yield* modules.decide({ moduleID: "boom", permission: "bash", patterns: ["ls"], metadata: {} }),
+        ).toEqual({ decision: "deny" })
       }).pipe(Effect.provide(PermissionModule.layer)),
     )
   })
@@ -300,6 +332,77 @@ itAsk.instance("generic permission module ask publishes pending request", () =>
     expect(pending[0]?.permission).toBe("bash")
     yield* permission.reply({ requestID: pending[0]!.id, reply: "once" })
     yield* Fiber.join(fiber)
+  }),
+)
+
+// Real (empty) registry: nothing registers cruise_control, mirroring a first run,
+// an offline install failure, or a user who removed the plugin.
+const unregisteredEnv = AppNodeBuilder.build(
+  LayerNode.group([
+    Permission.node,
+    PermissionModule.node,
+    EventV2Bridge.node,
+    CrossSpawnSpawner.node,
+    InstanceStore.node,
+  ]),
+  [[InstanceStore.bootstrapNode, noopBootstrap]],
+)
+
+const itUnregistered = testEffect(unregisteredEnv)
+
+itUnregistered.instance("unregistered cruise_control asks instead of denying", () =>
+  Effect.gen(function* () {
+    const permission = yield* Permission.Service
+    const fiber = yield* permission
+      .ask({
+        sessionID: SessionID.make("ses_module_missing"),
+        permission: "bash",
+        patterns: ["ls"],
+        metadata: {},
+        always: ["ls"],
+        ruleset: Permission.fromConfig({ bash: PermissionModuleSchema.CRUISE_CONTROL }),
+      })
+      .pipe(Effect.forkChild)
+
+    const pending = yield* Effect.gen(function* () {
+      while (true) {
+        const list = yield* permission.list()
+        if (list.length === 1) return list
+        yield* Effect.sleep("10 millis")
+      }
+    }).pipe(
+      Effect.timeoutOrElse({
+        duration: "1 second",
+        orElse: () => Effect.fail(new Error("timed out waiting for pending ask")),
+      }),
+    )
+
+    expect(pending[0]?.metadata).toMatchObject({
+      reason: 'Permission module "cruise_control" is not available; approve manually.',
+    })
+    yield* permission.reply({ requestID: pending[0]!.id, reply: "once" })
+    yield* Fiber.join(fiber)
+  }),
+)
+
+itUnregistered.instance("unrestricted mode still bypasses an unregistered module", () =>
+  Effect.gen(function* () {
+    process.env.KANCODE_UNRESTRICTED_PERMISSION = "1"
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        delete process.env.KANCODE_UNRESTRICTED_PERMISSION
+      }),
+    )
+    const permission = yield* Permission.Service
+    yield* permission.ask({
+      sessionID: SessionID.make("ses_module_unrestricted"),
+      permission: "bash",
+      patterns: ["ls"],
+      metadata: {},
+      always: ["ls"],
+      ruleset: Permission.fromConfig({ bash: PermissionModuleSchema.CRUISE_CONTROL }),
+    })
+    expect(yield* permission.list()).toEqual([])
   }),
 )
 

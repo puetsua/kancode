@@ -1,7 +1,11 @@
-import { PermissionModule as CorePermissionModule } from "@kancode/core/permission/module"
-import { PermissionModule as PermissionModuleSchema } from "@kancode/schema/permission-module"
-import { isModelGenerateError, type ModelCapability, type ModelMessage, type PluginPaths } from "@kancode/plugin"
-import { Duration, Effect, Schedule, Semaphore } from "effect"
+import {
+  isModelGenerateError,
+  type ModelCapability,
+  type ModelMessage,
+  type PermissionModuleDecideInput,
+  type PermissionModuleDecision,
+  type PluginPaths,
+} from "@kancode/plugin"
 import path from "path"
 import { explicitApprovalIntent } from "./approval"
 import { actionKey, CACHED_ALLOW_REASON, CACHED_DENY_REASON, lookupDynamic, rememberDynamic } from "./dynamic-list"
@@ -16,9 +20,32 @@ export {
   resetDynamicListsForTests,
 } from "./dynamic-list"
 
-export type Decision = CorePermissionModule.Decision
-export type DecideInput = CorePermissionModule.DecideInput
-export type DecideResult = CorePermissionModule.DecideResult
+export type Decision = Extract<PermissionModuleDecision, string>
+export type DecideResult = { decision: Decision; reason?: string; metadata?: Record<string, unknown> }
+/** Host decide input plus the module id the host routes on. */
+export type DecideInput = PermissionModuleDecideInput & { moduleID?: string; scope?: string }
+
+/**
+ * `permission_modules.cruise_control` options. Declared structurally rather than
+ * imported from `@kancode/schema`, which is `private: true` and unpublished; the
+ * host still owns validation of the config file itself.
+ */
+export namespace PermissionModuleSchema {
+  export type Instructions = Partial<Record<InstructionSection, string[]>>
+  export type Options = {
+    model?: string
+    instructions?: Instructions
+    fallback?: "ask" | "deny"
+    retries?: number
+    retry_interval_ms?: number
+    timeout_ms?: number
+    allowlist?: string[]
+    never_auto?: string[]
+    dynamic_list?: { enabled?: boolean; max_size?: number }
+    parallel_classify?: boolean
+    classify_gap_ms?: number
+  }
+}
 
 export type ClassifierLevel = "high" | "medium" | "low"
 export type CruiseControlDecision = "allow" | "deny"
@@ -47,43 +74,80 @@ const DEFAULT_TIMEOUT_MS = 8000
 const DEFAULT_RETRIES = 3
 /** Delay between classify retry attempts when `retry_interval_ms` is unset. */
 const DEFAULT_RETRY_INTERVAL_MS = 2000
-/**
- * Process-wide gate for cruise_control LLM classify calls when `parallel_classify` is false/omitted.
- * Rails and dynamic-list hits run before acquiring this permit.
- */
-const classifyLock = Semaphore.makeUnsafe(1)
 /** Minimum gap between successive serialized LLM classify calls (skips the first). */
 export const DEFAULT_CLASSIFY_GAP_MS = 250
+/**
+ * Process-wide gate for cruise_control LLM classify calls when `parallel_classify`
+ * is false/omitted. Rails and dynamic-list hits run before joining this chain.
+ */
+let classifyChain: Promise<unknown> = Promise.resolve()
 /** Wall-clock end of the last serialized classify (including gap bookkeeping). */
 let lastClassifyAt = 0
 
 /** Test helper: clear serialized-classify gap clock. */
 export function resetClassifyGapForTests() {
   lastClassifyAt = 0
+  classifyChain = Promise.resolve()
+}
+
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms))
 }
 
 /**
  * Serialize classify and insert a short pause before each call after the first,
  * so concurrent tool permissions do not hammer the classifier model back-to-back.
  */
-function withSerializedClassify<A, E, R>(
-  effect: Effect.Effect<A, E, R>,
-  gapMs: number,
-): Effect.Effect<A, E, R> {
-  return classifyLock.withPermits(1)(
-    Effect.gen(function* () {
-      const wait = Math.max(0, lastClassifyAt + gapMs - Date.now())
-      if (wait > 0) yield* Effect.sleep(Duration.millis(wait))
-      return yield* effect
-    }).pipe(
-      Effect.ensuring(
-        Effect.sync(() => {
-          lastClassifyAt = Date.now()
-        }),
-      ),
-    ),
+function withSerializedClassify<A>(run: () => Promise<A>, gapMs: number): Promise<A> {
+  const result = classifyChain.then(async () => {
+    const wait = Math.max(0, lastClassifyAt + gapMs - Date.now())
+    if (wait > 0) await sleep(wait)
+    try {
+      return await run()
+    } finally {
+      lastClassifyAt = Date.now()
+    }
+  })
+  // Chain on settlement, not success, so one failure does not wedge the queue.
+  classifyChain = result.then(
+    () => undefined,
+    () => undefined,
   )
+  return result
 }
+
+/** Rejects with this when a single classify attempt exceeds its budget. */
+class ClassifyTimeoutError extends Error {
+  constructor() {
+    super("TimeoutError")
+    this.name = "TimeoutError"
+  }
+}
+
+async function withTimeout<A>(run: () => Promise<A>, ms: number): Promise<A> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      run(),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new ClassifyTimeoutError()), ms)
+      }),
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
+/**
+ * Diagnostics sink. The host passes a structured logger; a standalone plugin can
+ * pass its own or omit it. Never used for control flow.
+ */
+export type ClassifierLogger = {
+  info: (message: string, data?: Record<string, unknown>) => void
+  warn: (message: string, data?: Record<string, unknown>) => void
+}
+
+const NOOP_LOGGER: ClassifierLogger = { info: () => {}, warn: () => {} }
 /** Used when `allowlist` is omitted from config. Explicit `allowlist: []` still blocks auto-allow. */
 export const DEFAULT_ALLOWLIST = [
   "read",
@@ -487,12 +551,13 @@ function unavailableReason(attempts: number): string {
  *
  * Used by cruise_control and exposed for contract tests.
  */
-export const runClassifier = Effect.fn("CruiseControl.runClassifier")(function* (input: {
+export async function runClassifier(input: {
   permission: string
   patterns: readonly string[]
   opts: PermissionModuleSchema.Options | undefined
-  classify: Effect.Effect<ClassifierObject, unknown>
+  classify: () => Promise<ClassifierObject>
   paths: PluginPaths
+  log?: ClassifierLogger
   modelRef?: string
   metadata?: Record<string, unknown>
   cacheScope?: string
@@ -501,9 +566,10 @@ export const runClassifier = Effect.fn("CruiseControl.runClassifier")(function* 
   /** Host-only; used for affirmation matching and never sent to the classifier LLM. */
   approvalPrompt?: string
 }) {
+  const log = input.log ?? NOOP_LOGGER
   const destructive = destructiveReason(input.permission, input.patterns)
   if (destructive) {
-    yield* Effect.logInfo("cruise_control destructive deny", {
+    log.info("cruise_control destructive deny", {
       permission: input.permission,
       patterns: input.patterns,
       reason: destructive,
@@ -515,7 +581,7 @@ export const runClassifier = Effect.fn("CruiseControl.runClassifier")(function* 
   if (managed) {
     const decision = applySafety("allow", input.permission, input.opts)
     const reason = decision === "allow" ? managed : "Denied by cruise_control safety rails"
-    yield* Effect.logInfo("cruise_control managed app directory decision", {
+    log.info("cruise_control managed app directory decision", {
       permission: input.permission,
       patterns: input.patterns,
       decision,
@@ -528,7 +594,7 @@ export const runClassifier = Effect.fn("CruiseControl.runClassifier")(function* 
   if (sessionTodo) {
     const decision = applySafety("allow", input.permission, input.opts)
     const reason = decision === "allow" ? sessionTodo : "Denied by cruise_control safety rails"
-    yield* Effect.logInfo("cruise_control session todo decision", {
+    log.info("cruise_control session todo decision", {
       permission: input.permission,
       patterns: input.patterns,
       decision,
@@ -541,7 +607,7 @@ export const runClassifier = Effect.fn("CruiseControl.runClassifier")(function* 
   if (sessionRename) {
     const decision = applySafety("allow", input.permission, input.opts)
     const reason = decision === "allow" ? sessionRename : "Denied by cruise_control safety rails"
-    yield* Effect.logInfo("cruise_control session rename decision", {
+    log.info("cruise_control session rename decision", {
       permission: input.permission,
       patterns: input.patterns,
       decision,
@@ -554,7 +620,7 @@ export const runClassifier = Effect.fn("CruiseControl.runClassifier")(function* 
   const key = actionKey(input.permission, input.patterns, input.metadata ?? {})
   const cached = input.cacheScope ? lookupDynamic(key, listOpts, input.cacheScope) : undefined
   if (cached === "deny") {
-    yield* Effect.logInfo("cruise_control cached deny", {
+    log.info("cruise_control cached deny", {
       permission: input.permission,
       patterns: input.patterns,
     })
@@ -563,7 +629,7 @@ export const runClassifier = Effect.fn("CruiseControl.runClassifier")(function* 
   if (cached === "allow") {
     const decision = applySafety("allow", input.permission, input.opts)
     if (decision === "allow") {
-      yield* Effect.logInfo("cruise_control cached allow", {
+      log.info("cruise_control cached allow", {
         permission: input.permission,
         patterns: input.patterns,
       })
@@ -589,7 +655,7 @@ export const runClassifier = Effect.fn("CruiseControl.runClassifier")(function* 
     if (input.cacheScope && outcome.decision === "allow") {
       rememberDynamic(key, "allow", listOpts, input.cacheScope)
     }
-    yield* Effect.logInfo("cruise_control explicit approval", {
+    log.info("cruise_control explicit approval", {
       permission: input.permission,
       patterns: input.patterns,
       decision: outcome.decision,
@@ -604,76 +670,70 @@ export const runClassifier = Effect.fn("CruiseControl.runClassifier")(function* 
   const classifyGapMs = input.opts?.classify_gap_ms ?? DEFAULT_CLASSIFY_GAP_MS
   const started = Date.now()
   // Default false: one LLM classify at a time, with classify_gap_ms between successive calls.
-  const classify =
-    input.opts?.parallel_classify === true ? input.classify : withSerializedClassify(input.classify, classifyGapMs)
+  // Timeout budget is per attempt and covers the model call only — never the wait
+  // for the serialize queue. Racing the queue wait would abandon an attempt that
+  // had not started yet, losing a retry while the queued work still ran later.
+  const attempt = () => withTimeout(input.classify, timeoutMs)
+  const classify = () =>
+    input.opts?.parallel_classify === true ? attempt() : withSerializedClassify(attempt, classifyGapMs)
 
-  const classifyOnce = classify.pipe(
-    Effect.map((result) => {
-      // Explicit approval already returned above; this path always has explicitApproval: false.
-      const derivedIntent = deriveInstructionIntent({
-        modelIntent: result.intent,
-        hasExplicitPrompt: input.hasExplicitPrompt === true,
-        explicitApproval: false,
-      })
-      const intent = derivedIntent.intent
-      const derived = decisionFromAssessment(result.risk, intent)
-      const decision = applySafety(derived, input.permission, input.opts)
-      const reason =
-        derived === "allow" && decision === "deny"
-          ? "Denied by cruise_control safety rails"
-          : shortenReason(derivedIntent.reason === "Classifier assessment." ? result.reason : derivedIntent.reason) ||
-            "No classifier reason provided"
-      return {
-        decision,
-        reason,
-        risk: result.risk,
-        intent,
-        review: { risk: result.risk, intent, reason },
-        learned: true as const,
-      }
-    }),
-    // Timeout budget is per attempt; retries each get a fresh timeout_ms window.
-    Effect.timeout(timeoutMs),
-  )
+  const classifyOnce = async () => {
+    const result = await classify()
+    // Explicit approval already returned above; this path always has explicitApproval: false.
+    const derivedIntent = deriveInstructionIntent({
+      modelIntent: result.intent,
+      hasExplicitPrompt: input.hasExplicitPrompt === true,
+      explicitApproval: false,
+    })
+    const intent = derivedIntent.intent
+    const derived = decisionFromAssessment(result.risk, intent)
+    const decision = applySafety(derived, input.permission, input.opts)
+    const reason =
+      derived === "allow" && decision === "deny"
+        ? "Denied by cruise_control safety rails"
+        : shortenReason(derivedIntent.reason === "Classifier assessment." ? result.reason : derivedIntent.reason) ||
+          "No classifier reason provided"
+    return {
+      decision,
+      reason,
+      risk: result.risk,
+      intent,
+      review: { risk: result.risk, intent, reason },
+      learned: true as const,
+    }
+  }
 
-  const retrySchedule = Schedule.spaced(Duration.millis(retryIntervalMs)).pipe(
-    Schedule.both(Schedule.recurs(Math.max(0, maxAttempts - 1))),
-  )
-
-  const outcome = yield* (
-    maxAttempts <= 0
-      ? Effect.fail("no classifier attempts configured" as const)
-      : classifyOnce.pipe(
-          Effect.tapError((error) =>
-            Effect.logWarning("cruise_control classification attempt failed", {
-              permission: input.permission,
-              model: input.modelRef,
-              error: String(error),
-            }),
-          ),
-          Effect.retry(retrySchedule),
-        )
-  ).pipe(
-    Effect.catch((error) =>
-      Effect.gen(function* () {
-        const attempts = Math.max(0, maxAttempts)
-        yield* Effect.logWarning("cruise_control classification failed", {
+  const outcome = await (async () => {
+    let lastError: unknown = "no classifier attempts configured"
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      if (attempt > 0 && retryIntervalMs > 0) await sleep(retryIntervalMs)
+      try {
+        return await classifyOnce()
+      } catch (error) {
+        lastError = error
+        log.warn("cruise_control classification attempt failed", {
           permission: input.permission,
           model: input.modelRef,
-          attempts,
-          latency_ms: Date.now() - started,
           error: String(error),
         })
-        // Failure is always binary fail-closed. Configured fallback "ask" is intentionally ignored.
-        // Do not learn unavailable outcomes — they are not action-specific judgments.
-        return {
-          decision: "deny" as const,
-          reason: unavailableReason(attempts),
-          learned: false as const,
-        }
-      }),
-    ),
-  )
+      }
+    }
+    const attempts = Math.max(0, maxAttempts)
+    log.warn("cruise_control classification failed", {
+      permission: input.permission,
+      model: input.modelRef,
+      attempts,
+      latency_ms: Date.now() - started,
+      error: String(lastError),
+    })
+    // Failure is always binary fail-closed. Configured fallback "ask" is intentionally ignored.
+    // Do not learn unavailable outcomes — they are not action-specific judgments.
+    return {
+      decision: "deny" as const,
+      reason: unavailableReason(attempts),
+      learned: false as const,
+    }
+  })()
 
   // Only learn low-risk judgments. Medium/high allows (via intent) and higher-risk
   // denies must re-classify so context-sensitive intent is not sticky within the turn.
@@ -687,7 +747,7 @@ export const runClassifier = Effect.fn("CruiseControl.runClassifier")(function* 
     rememberDynamic(key, outcome.decision, listOpts, input.cacheScope)
   }
 
-  yield* Effect.logInfo("cruise_control decision", {
+  log.info("cruise_control decision", {
     permission: input.permission,
     patterns: input.patterns,
     model: input.modelRef,
@@ -703,7 +763,7 @@ export const runClassifier = Effect.fn("CruiseControl.runClassifier")(function* 
     reason: outcome.reason,
     ...("review" in outcome ? { review: outcome.review } : {}),
   }
-})
+}
 
 /**
  * Classify through the public plugin model capability. The host validates only
@@ -739,51 +799,47 @@ async function generateClassifierObject(input: {
 }
 
 /** Effect decide handler for the built-in cruise_control permission module. */
-export const decideCruiseControl = Effect.fn("CruiseControl.decide")(function* (
+export async function decideCruiseControl(
   input: DecideInput & {
     model: ModelCapability
     paths: PluginPaths
     /** Resolved `permission_modules.cruise_control`; read fresh per decision by the caller. */
     options: PermissionModuleSchema.Options | undefined
+    log?: ClassifierLogger
   },
 ) {
+  const log = input.log ?? NOOP_LOGGER
   const opts = input.options
   const modelRef = opts?.model?.trim()
 
   if (!modelRef) {
-    yield* Effect.logWarning(MISSING_MODEL_MESSAGE)
+    log.warn(MISSING_MODEL_MESSAGE)
     return { decision: "ask" as const, reason: MISSING_MODEL_MESSAGE }
   }
 
-  const classify = Effect.gen(function* () {
-    const messages = buildClassifierMessages({
-      permission: input.permission,
-      patterns: input.patterns,
-      metadata: input.metadata,
-      userPrompt: input.userPrompt,
-      sessionContext: input.sessionContext,
-      instructions: resolveInstructions(opts),
+  const classify = () =>
+    generateClassifierObject({
+      model: input.model,
+      modelRef,
+      messages: buildClassifierMessages({
+        permission: input.permission,
+        patterns: input.patterns,
+        metadata: input.metadata,
+        userPrompt: input.userPrompt,
+        sessionContext: input.sessionContext,
+        instructions: resolveInstructions(opts),
+      }),
+      // Mirrors runClassifier's per-attempt budget so the request is aborted,
+      // not merely abandoned, when the attempt gives up.
+      timeoutMs: opts?.timeout_ms ?? DEFAULT_TIMEOUT_MS,
     })
 
-    return yield* Effect.tryPromise({
-      try: () =>
-        generateClassifierObject({
-          model: input.model,
-          modelRef,
-          messages,
-          // Mirrors runClassifier's per-attempt budget so the request is aborted,
-          // not merely abandoned, when the attempt gives up.
-          timeoutMs: opts?.timeout_ms ?? DEFAULT_TIMEOUT_MS,
-        }),
-      catch: (cause) => cause,
-    })
-  })
-
-  return yield* runClassifier({
+  return await runClassifier({
     permission: input.permission,
     patterns: input.patterns,
     opts,
     classify,
+    log,
     paths: input.paths,
     modelRef,
     metadata: input.metadata,
@@ -792,4 +848,4 @@ export const decideCruiseControl = Effect.fn("CruiseControl.decide")(function* (
     userPrompt: input.userPrompt,
     approvalPrompt: input.approvalPrompt,
   })
-})
+}

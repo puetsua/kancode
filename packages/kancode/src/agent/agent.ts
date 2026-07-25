@@ -20,7 +20,7 @@ import {
   AGENT_ID as CRUISECONTROL_ID,
   AGENT_PROMPT as PROMPT_CRUISECONTROL,
   cruiseControlPermissionConfig,
-} from "@/plugin/cruise-control/agent"
+} from "@/agent/cruise-control"
 import { managedAppDirectoryGlobs } from "@/plugin/cruise-control/classifier"
 import { mergeDeep, pipe, sortBy, values } from "remeda"
 import { Global } from "@kancode/core/global"

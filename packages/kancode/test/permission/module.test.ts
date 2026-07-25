@@ -777,16 +777,18 @@ itMissingModel.instance("unset cruise_control model asks with a configuration hi
       id: PermissionModuleSchema.CRUISE_CONTROL,
       decide: (input) =>
         // Model capability must never be reached: an unset model short-circuits first.
-        decideCruiseControl({
+        Effect.promise(() =>
+          decideCruiseControl({
           ...input,
           paths: TEST_PATHS,
           options: undefined,
-          model: {
-            generate: async () => {
-              throw new Error("classifier must not call the model when none is configured")
+            model: {
+              generate: async () => {
+                throw new Error("classifier must not call the model when none is configured")
+              },
             },
-          },
-        }),
+          }),
+        ),
     })
     expect(
       yield* modules.decide({
@@ -925,7 +927,7 @@ describe("classifier contract", () => {
       ),
     )
     const registered: string[] = []
-    await createCruiseControlPlugin(bridge)({
+    await createCruiseControlPlugin()({
       ...fakePluginInput(),
       permission: { registerModule: (module) => registered.push(module.id) },
     })
@@ -1123,8 +1125,7 @@ describe("classifier contract", () => {
       },
       { info: { role: "user" }, parts: [{ type: "text", text: "ok" }] },
     ]
-    const outcome = await Effect.runPromise(
-      runClassifier({
+    const outcome = await runClassifier({
         paths: TEST_PATHS,
         permission: "bash",
         patterns: ["git reset --soft HEAD~1"],
@@ -1133,9 +1134,8 @@ describe("classifier contract", () => {
         hasExplicitPrompt: true,
         userPrompt: currentUserPrompt(messages),
         approvalPrompt: cruiseControlUserPrompt(messages),
-        classify: Effect.die("classifier should not run"),
-      }),
-    )
+        classify: async () => { throw new Error("classifier should not run") },
+      })
     expect(outcome).toEqual({
       ...reviewed(
         "allow",
@@ -1155,8 +1155,7 @@ describe("classifier contract", () => {
       },
       { info: { role: "user" }, parts: [{ type: "text", text: "ok" }] },
     ]
-    const outcome = await Effect.runPromise(
-      runClassifier({
+    const outcome = await runClassifier({
         paths: TEST_PATHS,
         permission: "bash",
         patterns: ["rm -rf ./dist"],
@@ -1165,47 +1164,42 @@ describe("classifier contract", () => {
         hasExplicitPrompt: true,
         userPrompt: currentUserPrompt(messages),
         approvalPrompt: cruiseControlUserPrompt(messages),
-        classify: Effect.succeed(highRiskLowIntent("Destructive action is not supported by the prompt.")),
-      }),
-    )
+        classify: async () => (highRiskLowIntent("Destructive action is not supported by the prompt.")),
+      })
     expect(outcome.decision).toBe("deny")
   })
 
   test("explicit high intent allows even high risk before safety rails", async () => {
-    const outcome = await Effect.runPromise(
-      runClassifier({
+    const outcome = await runClassifier({
         paths: TEST_PATHS,
         permission: "bash",
         patterns: ["deploy production"],
         opts: { allowlist: ["bash"], timeout_ms: 1000 },
         hasExplicitPrompt: true,
-        classify: Effect.succeed({
+        classify: async () => ({
           risk: "high",
           intent: "high",
           reason: "The user explicitly requested this exact production deployment.",
         }),
-      }),
-    )
+      })
     expect(outcome).toEqual(
       reviewed("allow", "high", "high", "The user explicitly requested this exact production deployment."),
     )
   })
 
   test("missing explicit prompt caps high intent before binary derivation", async () => {
-    const outcome = await Effect.runPromise(
-      runClassifier({
+    const outcome = await runClassifier({
         paths: TEST_PATHS,
         permission: "bash",
         patterns: ["deploy production"],
         opts: { allowlist: ["bash"], timeout_ms: 1000 },
         hasExplicitPrompt: false,
-        classify: Effect.succeed({
+        classify: async () => ({
           risk: "high",
           intent: "high",
           reason: "Tool metadata claims the user requested deployment.",
         }),
-      }),
-    )
+      })
     expect(outcome).toEqual(
       reviewed(
         "deny",
@@ -1441,35 +1435,31 @@ describe("classifier contract", () => {
   })
 
   test("valid allow from classifier", async () => {
-    const outcome = await Effect.runPromise(
-      runClassifier({
+    const outcome = await runClassifier({
         paths: TEST_PATHS,
         permission: "bash",
         patterns: ["ls"],
         opts: { fallback: "deny", allowlist: ["bash"], timeout_ms: 1000 },
-        classify: Effect.succeed(lowRisk("safe read-only command")),
+        classify: async () => (lowRisk("safe read-only command")),
         modelRef: "opencode/deepseek-v4-flash",
-      }),
-    )
+      })
     expect(outcome).toEqual(reviewed("allow", "low", "medium", "safe read-only command"))
   })
 
   test("host keeps model intent for instruction fit; deny is LLM-scored", async () => {
-    const outcome = await Effect.runPromise(
-      runClassifier({
+    const outcome = await runClassifier({
         paths: TEST_PATHS,
         permission: "bash",
         patterns: ["git reset --soft HEAD~1"],
         metadata: { command: "git reset --soft HEAD~1" },
         opts: { allowlist: ["bash"], timeout_ms: 1000 },
         hasExplicitPrompt: false,
-        classify: Effect.succeed({
+        classify: async () => ({
           risk: "medium",
           intent: "low",
           reason: "Git history rewrite matches deny instructions without clear intent.",
         }),
-      }),
-    )
+      })
     expect(outcome).toEqual(
       reviewed(
         "deny",
@@ -1481,20 +1471,18 @@ describe("classifier contract", () => {
   })
 
   test("read permission allows on classifier medium/medium without host instruction regex", async () => {
-    const outcome = await Effect.runPromise(
-      runClassifier({
+    const outcome = await runClassifier({
         paths: TEST_PATHS,
         permission: "read",
         patterns: ["src/index.ts"],
         opts: { allowlist: ["read"], timeout_ms: 1000 },
         hasExplicitPrompt: false,
-        classify: Effect.succeed({
+        classify: async () => ({
           risk: "medium",
           intent: "medium",
           reason: "Classifier was uncertain.",
         }),
-      }),
-    )
+      })
     expect(outcome).toEqual(reviewed("allow", "medium", "medium", "Classifier was uncertain."))
   })
 
@@ -1525,34 +1513,30 @@ describe("classifier contract", () => {
   })
 
   test("valid allow from classifier legacy", async () => {
-    const outcome = await Effect.runPromise(
-      runClassifier({
+    const outcome = await runClassifier({
         paths: TEST_PATHS,
         permission: "bash",
         patterns: ["deploy --dry-run"],
         opts: { fallback: "deny", allowlist: ["bash"], timeout_ms: 1000 },
-        classify: Effect.succeed(lowRisk("safe read-only command")),
+        classify: async () => (lowRisk("safe read-only command")),
         modelRef: "opencode/deepseek-v4-flash",
-      }),
-    )
+      })
     expect(outcome).toEqual(reviewed("allow", "low", "medium", "safe read-only command"))
   })
 
   test("destructive patterns deny without calling classifier", async () => {
     let called = false
-    const outcome = await Effect.runPromise(
-      runClassifier({
+    const outcome = await runClassifier({
         paths: TEST_PATHS,
         permission: "bash",
         patterns: ["rm -rf /"],
         opts: { fallback: "ask", allowlist: ["bash"], timeout_ms: 1000 },
-        classify: Effect.sync(() => {
+        classify: async () => {
           called = true
           return lowRisk("should not run")
-        }),
+        },
         modelRef: "opencode/deepseek-v4-flash",
-      }),
-    )
+      })
     expect(called).toBe(false)
     expect(outcome).toEqual({
       decision: "deny",
@@ -1563,19 +1547,17 @@ describe("classifier contract", () => {
   test("managed app directory allowed by rails skips classifier", async () => {
     let called = false
     const configGlob = path.join(Global.Path.config, "*")
-    const outcome = await Effect.runPromise(
-      runClassifier({
+    const outcome = await runClassifier({
         paths: TEST_PATHS,
         permission: "external_directory",
         patterns: [configGlob],
         opts: { fallback: "ask", allowlist: ["external_directory"], timeout_ms: 1000 },
-        classify: Effect.sync(() => {
+        classify: async () => {
           called = true
           return highRiskLowIntent("should not run")
-        }),
+        },
         modelRef: "opencode/deepseek-v4-flash",
-      }),
-    )
+      })
     expect(called).toBe(false)
     expect(outcome).toEqual({
       decision: "allow",
@@ -1584,8 +1566,7 @@ describe("classifier contract", () => {
   })
 
   test("managed app directory candidate allow is denied by never_auto", async () => {
-    const outcome = await Effect.runPromise(
-      runClassifier({
+    const outcome = await runClassifier({
         paths: TEST_PATHS,
         permission: "external_directory",
         patterns: [path.join(Global.Path.config, "*")],
@@ -1594,9 +1575,8 @@ describe("classifier contract", () => {
           never_auto: ["external_directory"],
           timeout_ms: 1000,
         },
-        classify: Effect.succeed(lowRisk("should not run")),
-      }),
-    )
+        classify: async () => (lowRisk("should not run")),
+      })
     expect(outcome).toEqual({
       decision: "deny",
       reason: "Denied by cruise_control safety rails",
@@ -1605,20 +1585,18 @@ describe("classifier contract", () => {
 
   test("session-scoped todowrite allow skips classifier", async () => {
     let called = false
-    const outcome = await Effect.runPromise(
-      runClassifier({
+    const outcome = await runClassifier({
         paths: TEST_PATHS,
         permission: "todowrite",
         patterns: ["session"],
         metadata: { sessionID: "ses_test", scope: "session", kind: "todo_list", count: 2 },
         opts: { fallback: "ask", allowlist: ["todowrite"], timeout_ms: 1000 },
-        classify: Effect.sync(() => {
+        classify: async () => {
           called = true
           return highRiskLowIntent("should not run")
-        }),
+        },
         modelRef: "opencode/deepseek-v4-flash",
-      }),
-    )
+      })
     expect(called).toBe(false)
     expect(outcome).toEqual({
       decision: "allow",
@@ -1628,20 +1606,18 @@ describe("classifier contract", () => {
 
   test("session-scoped session_rename allow skips classifier", async () => {
     let called = false
-    const outcome = await Effect.runPromise(
-      runClassifier({
+    const outcome = await runClassifier({
         paths: TEST_PATHS,
         permission: "session_rename",
         patterns: ["session"],
         metadata: { sessionID: "ses_test", scope: "session", kind: "session_title", title: "Renamed" },
         opts: { fallback: "ask", allowlist: ["session_rename"], timeout_ms: 1000 },
-        classify: Effect.sync(() => {
+        classify: async () => {
           called = true
           return highRiskLowIntent("should not run")
-        }),
+        },
         modelRef: "opencode/deepseek-v4-flash",
-      }),
-    )
+      })
     expect(called).toBe(false)
     expect(outcome).toEqual({
       decision: "allow",
@@ -1650,16 +1626,14 @@ describe("classifier contract", () => {
   })
 
   test("session-scoped todowrite candidate allow is denied by an empty allowlist", async () => {
-    const outcome = await Effect.runPromise(
-      runClassifier({
+    const outcome = await runClassifier({
         paths: TEST_PATHS,
         permission: "todowrite",
         patterns: ["session"],
         metadata: { scope: "session" },
         opts: { allowlist: [], timeout_ms: 1000 },
-        classify: Effect.succeed(lowRisk("should not run")),
-      }),
-    )
+        classify: async () => (lowRisk("should not run")),
+      })
     expect(outcome).toEqual({
       decision: "deny",
       reason: "Denied by cruise_control safety rails",
@@ -1668,29 +1642,26 @@ describe("classifier contract", () => {
 
   test("unscoped todowrite wildcard still reaches classifier", async () => {
     let called = false
-    const outcome = await Effect.runPromise(
-      runClassifier({
+    const outcome = await runClassifier({
         paths: TEST_PATHS,
         permission: "todowrite",
         patterns: ["*"],
         metadata: {},
         opts: { fallback: "ask", allowlist: ["todowrite"], timeout_ms: 1000 },
-        classify: Effect.sync(() => {
+        classify: async () => {
           called = true
           return highRiskLowIntent(
             "No metadata provided to scope the write; wildcard pattern is too broad without explicit user intent.",
           )
-        }),
+        },
         modelRef: "opencode/deepseek-v4-flash",
-      }),
-    )
+      })
     expect(called).toBe(true)
     expect(outcome.decision).toBe("deny")
   })
 
   test("safety rails replace allow-sounding reason and deny", async () => {
-    const outcome = await Effect.runPromise(
-      runClassifier({
+    const outcome = await runClassifier({
         paths: TEST_PATHS,
         permission: "external_directory",
         patterns: ["/some/other/path/*"],
@@ -1700,12 +1671,10 @@ describe("classifier contract", () => {
           never_auto: ["external_directory"],
           timeout_ms: 1000,
         },
-        classify: Effect.succeed(
+        classify: async () =>
           lowRisk("Access to user's own configuration directory for kancode is a standard, safe operation."),
-        ),
         modelRef: "opencode/deepseek-v4-flash",
-      }),
-    )
+      })
     expect(outcome).toEqual({
       decision: "deny",
       reason: "Denied by cruise_control safety rails",
@@ -1718,93 +1687,81 @@ describe("classifier contract", () => {
   })
 
   test("classifier allow for external_directory sticks without never_auto", async () => {
-    const outcome = await Effect.runPromise(
-      runClassifier({
+    const outcome = await runClassifier({
         paths: TEST_PATHS,
         permission: "external_directory",
         patterns: ["/tmp/build/*"],
         opts: { fallback: "ask", allowlist: ["external_directory"], timeout_ms: 1000 },
-        classify: Effect.succeed(lowRisk("Temp build output path is safe for this task.")),
+        classify: async () => (lowRisk("Temp build output path is safe for this task.")),
         modelRef: "opencode/deepseek-v4-flash",
-      }),
-    )
+      })
     expect(outcome).toEqual(reviewed("allow", "low", "medium", "Temp build output path is safe for this task."))
   })
 
   test("classifier allow for external_directory sticks with default allowlist", async () => {
-    const outcome = await Effect.runPromise(
-      runClassifier({
+    const outcome = await runClassifier({
         paths: TEST_PATHS,
         permission: "external_directory",
         patterns: ["/tmp/build/*"],
         opts: { fallback: "ask", timeout_ms: 1000 },
-        classify: Effect.succeed(lowRisk("Temp build output path is safe for this task.")),
+        classify: async () => (lowRisk("Temp build output path is safe for this task.")),
         modelRef: "opencode/deepseek-v4-flash",
-      }),
-    )
+      })
     expect(outcome).toEqual(reviewed("allow", "low", "medium", "Temp build output path is safe for this task."))
   })
 
   test("invalid classifier output denies even with fallback ask", async () => {
-    const outcome = await Effect.runPromise(
-      runClassifier({
+    const outcome = await runClassifier({
         paths: TEST_PATHS,
         permission: "bash",
         patterns: ["ls"],
         opts: { fallback: "ask", allowlist: ["bash"], timeout_ms: 1000, retries: 1 },
-        classify: Effect.fail(new Error("invalid JSON")),
+        classify: async () => { throw new Error("invalid JSON") },
         modelRef: "opencode/deepseek-v4-flash",
-      }),
-    )
+      })
     expect(outcome.decision).toBe("deny")
     expect(outcome.reason).toBe("Classifier unavailable after 1 attempts; denied")
   })
 
   test("timeout uses fallback and never allows", async () => {
-    const outcome = await Effect.runPromise(
-      runClassifier({
+    const outcome = await runClassifier({
         paths: TEST_PATHS,
         permission: "bash",
         patterns: ["ls"],
         opts: { fallback: "deny", allowlist: ["bash"], timeout_ms: 20, retries: 1 },
-        classify: Effect.sleep("1 second").pipe(Effect.as(lowRisk("late"))),
+        classify: async () => { await new Promise((r) => setTimeout(r, 1000)); return lowRisk("late") },
         modelRef: "opencode/deepseek-v4-flash",
-      }),
-    )
+      })
     expect(outcome.decision).toBe("deny")
     expect(outcome.reason).toBe("Classifier unavailable after 1 attempts; denied")
   })
 
   test("timeout defaults to deny when fallback unset", async () => {
-    const outcome = await Effect.runPromise(
-      runClassifier({
+    const outcome = await runClassifier({
         paths: TEST_PATHS,
         permission: "bash",
         patterns: ["ls"],
         opts: { allowlist: ["bash"], timeout_ms: 20, retries: 1 },
-        classify: Effect.sleep("1 second").pipe(Effect.as(lowRisk("late"))),
+        classify: async () => { await new Promise((r) => setTimeout(r, 1000)); return lowRisk("late") },
         modelRef: "opencode/deepseek-v4-flash",
-      }),
-    )
+      })
     expect(outcome.decision).toBe("deny")
     expect(outcome.reason).toBe("Classifier unavailable after 1 attempts; denied")
   })
 
   test("retries defaults to 3 total attempts then reports count in fallback", async () => {
     let calls = 0
-    const outcome = await Effect.runPromise(
-      runClassifier({
+    const outcome = await runClassifier({
         paths: TEST_PATHS,
         permission: "bash",
         patterns: ["ls"],
         opts: { fallback: "ask", allowlist: ["bash"], timeout_ms: 1000, retry_interval_ms: 0 },
-        classify: Effect.suspend(() => {
+        classify: async () => {
           calls += 1
-          return Effect.fail(new Error(`fail ${calls}`))
-        }),
+          throw new Error(`fail ${calls}`)
+        },
         modelRef: "opencode/deepseek-v4-flash",
-      }),
-    )
+      })
     expect(calls).toBe(3)
     expect(outcome).toEqual({
       decision: "deny",
@@ -1814,20 +1771,18 @@ describe("classifier contract", () => {
 
   test("retries succeeds on a later attempt", async () => {
     let calls = 0
-    const outcome = await Effect.runPromise(
-      runClassifier({
+    const outcome = await runClassifier({
         paths: TEST_PATHS,
         permission: "bash",
         patterns: ["deploy --dry-run"],
         opts: { fallback: "ask", allowlist: ["bash"], timeout_ms: 1000, retries: 3, retry_interval_ms: 0 },
-        classify: Effect.suspend(() => {
+        classify: async () => {
           calls += 1
-          if (calls < 2) return Effect.fail(new Error("transient"))
-          return Effect.succeed(lowRisk("ok after retry"))
-        }),
+          if (calls < 2) throw new Error("transient")
+          return lowRisk("ok after retry")
+        },
         modelRef: "opencode/deepseek-v4-flash",
-      }),
-    )
+      })
     expect(calls).toBe(2)
     expect(outcome).toEqual(reviewed("allow", "low", "medium", "ok after retry"))
   })
@@ -1835,8 +1790,7 @@ describe("classifier contract", () => {
   test("retry_interval_ms delays between classify attempts", async () => {
     let calls = 0
     const started = Date.now()
-    const outcome = await Effect.runPromise(
-      runClassifier({
+    const outcome = await runClassifier({
         paths: TEST_PATHS,
         permission: "bash",
         patterns: ["ls"],
@@ -1847,13 +1801,12 @@ describe("classifier contract", () => {
           retries: 2,
           retry_interval_ms: 80,
         },
-        classify: Effect.suspend(() => {
+        classify: async () => {
           calls += 1
-          return Effect.fail(new Error(`fail ${calls}`))
-        }),
+          throw new Error(`fail ${calls}`)
+        },
         modelRef: "opencode/deepseek-v4-flash",
-      }),
-    )
+      })
     expect(calls).toBe(2)
     expect(Date.now() - started).toBeGreaterThanOrEqual(70)
     expect(outcome.decision).toBe("deny")
@@ -1861,19 +1814,17 @@ describe("classifier contract", () => {
 
   test("retries: 0 skips classify and falls back immediately", async () => {
     let calls = 0
-    const outcome = await Effect.runPromise(
-      runClassifier({
+    const outcome = await runClassifier({
         paths: TEST_PATHS,
         permission: "bash",
         patterns: ["ls"],
         opts: { fallback: "deny", allowlist: ["bash"], retries: 0 },
-        classify: Effect.sync(() => {
+        classify: async () => {
           calls += 1
           return lowRisk("should not run")
-        }),
+        },
         modelRef: "opencode/deepseek-v4-flash",
-      }),
-    )
+      })
     expect(calls).toBe(0)
     expect(outcome).toEqual({
       decision: "deny",
@@ -1883,20 +1834,18 @@ describe("classifier contract", () => {
 
   test("timeout budget is per attempt", async () => {
     let calls = 0
-    const outcome = await Effect.runPromise(
-      runClassifier({
+    const outcome = await runClassifier({
         paths: TEST_PATHS,
         permission: "bash",
         patterns: ["ls"],
         opts: { fallback: "ask", allowlist: ["bash"], timeout_ms: 40, retries: 2, retry_interval_ms: 0 },
-        classify: Effect.gen(function* () {
+        classify: async () => {
           calls += 1
-          yield* Effect.sleep("80 millis")
+          await new Promise((r) => setTimeout(r, 80))
           return lowRisk("late")
-        }),
+        },
         modelRef: "opencode/deepseek-v4-flash",
-      }),
-    )
+      })
     expect(calls).toBe(2)
     expect(outcome.decision).toBe("deny")
     expect(outcome.reason).toBe("Classifier unavailable after 2 attempts; denied")
@@ -1906,13 +1855,13 @@ describe("classifier contract", () => {
     resetClassifyGapForTests()
     let active = 0
     let maxActive = 0
-    const classify = Effect.gen(function* () {
+    const classify = async () => {
       active += 1
       maxActive = Math.max(maxActive, active)
-      yield* Effect.sleep("40 millis")
+      await new Promise((r) => setTimeout(r, 40))
       active -= 1
       return lowRisk("ok")
-    })
+    }
     const opts = {
       fallback: "ask" as const,
       allowlist: ["bash"],
@@ -1921,8 +1870,7 @@ describe("classifier contract", () => {
       parallel_classify: false,
       classify_gap_ms: 0,
     }
-    const [a, b] = await Effect.runPromise(
-      Effect.all(
+    const [a, b] = await Promise.all(
         [
           runClassifier({
             paths: TEST_PATHS,
@@ -1940,10 +1888,7 @@ describe("classifier contract", () => {
             classify,
             modelRef: "opencode/deepseek-v4-flash",
           }),
-        ],
-        { concurrency: "unbounded" },
-      ),
-    )
+        ])
     expect(a.decision).toBe("allow")
     expect(b.decision).toBe("allow")
     expect(maxActive).toBe(1)
@@ -1953,10 +1898,10 @@ describe("classifier contract", () => {
     resetClassifyGapForTests()
     const gapMs = 120
     const starts: number[] = []
-    const classify = Effect.sync(() => {
+    const classify = async () => {
       starts.push(Date.now())
       return lowRisk("ok")
-    })
+    }
     const opts = {
       fallback: "ask" as const,
       allowlist: ["bash"],
@@ -1965,8 +1910,7 @@ describe("classifier contract", () => {
       parallel_classify: false,
       classify_gap_ms: gapMs,
     }
-    await Effect.runPromise(
-      Effect.all(
+    await Promise.all(
         [
           runClassifier({
             paths: TEST_PATHS,
@@ -1984,10 +1928,7 @@ describe("classifier contract", () => {
             classify,
             modelRef: "opencode/deepseek-v4-flash",
           }),
-        ],
-        { concurrency: "unbounded" },
-      ),
-    )
+        ])
     expect(starts).toHaveLength(2)
     expect(starts[1]! - starts[0]!).toBeGreaterThanOrEqual(gapMs - 20)
   })
@@ -1995,10 +1936,10 @@ describe("classifier contract", () => {
   test("classify_gap_ms 0 skips pause between serialized calls", async () => {
     resetClassifyGapForTests()
     const starts: number[] = []
-    const classify = Effect.sync(() => {
+    const classify = async () => {
       starts.push(Date.now())
       return lowRisk("ok")
-    })
+    }
     const opts = {
       fallback: "ask" as const,
       allowlist: ["bash"],
@@ -2007,8 +1948,7 @@ describe("classifier contract", () => {
       parallel_classify: false,
       classify_gap_ms: 0,
     }
-    await Effect.runPromise(
-      Effect.all(
+    await Promise.all(
         [
           runClassifier({
             paths: TEST_PATHS,
@@ -2026,10 +1966,7 @@ describe("classifier contract", () => {
             classify,
             modelRef: "opencode/deepseek-v4-flash",
           }),
-        ],
-        { concurrency: "unbounded" },
-      ),
-    )
+        ])
     expect(starts).toHaveLength(2)
     expect(starts[1]! - starts[0]!).toBeLessThan(DEFAULT_CLASSIFY_GAP_MS)
   })
@@ -2038,13 +1975,13 @@ describe("classifier contract", () => {
     resetClassifyGapForTests()
     let active = 0
     let maxActive = 0
-    const classify = Effect.gen(function* () {
+    const classify = async () => {
       active += 1
       maxActive = Math.max(maxActive, active)
-      yield* Effect.sleep("40 millis")
+      await new Promise((r) => setTimeout(r, 40))
       active -= 1
       return lowRisk("ok")
-    })
+    }
     const opts = {
       fallback: "ask" as const,
       allowlist: ["bash"],
@@ -2052,8 +1989,7 @@ describe("classifier contract", () => {
       retries: 1,
       classify_gap_ms: 0,
     }
-    await Effect.runPromise(
-      Effect.all(
+    await Promise.all(
         [
           runClassifier({
             paths: TEST_PATHS,
@@ -2071,27 +2007,29 @@ describe("classifier contract", () => {
             classify,
             modelRef: "opencode/deepseek-v4-flash",
           }),
-        ],
-        { concurrency: "unbounded" },
-      ),
-    )
+        ])
     expect(maxActive).toBe(1)
   })
 
   test("parallel_classify true allows concurrent classify", async () => {
     let active = 0
     let maxActive = 0
-    const bothStarted = await Effect.runPromise(Deferred.make<void>())
+    let releaseBoth: (() => void) | undefined
+    const bothStarted = new Promise<void>((resolve) => {
+      releaseBoth = resolve
+    })
     let started = 0
-    const classify = Effect.gen(function* () {
+    const classify = async () => {
       active += 1
       maxActive = Math.max(maxActive, active)
       started += 1
-      if (started === 2) yield* Deferred.succeed(bothStarted, undefined)
-      yield* Deferred.await(bothStarted)
+      // Each call parks until both are in flight, so a serialized runner deadlocks
+      // (and times out) while a parallel one lets both through.
+      if (started === 2) releaseBoth?.()
+      await bothStarted
       active -= 1
       return lowRisk("ok")
-    })
+    }
     const opts = {
       fallback: "ask" as const,
       allowlist: ["bash"],
@@ -2099,8 +2037,7 @@ describe("classifier contract", () => {
       retries: 1,
       parallel_classify: true,
     }
-    await Effect.runPromise(
-      Effect.all(
+    await Promise.all(
         [
           runClassifier({
             paths: TEST_PATHS,
@@ -2118,21 +2055,24 @@ describe("classifier contract", () => {
             classify,
             modelRef: "opencode/deepseek-v4-flash",
           }),
-        ],
-        { concurrency: "unbounded" },
-      ),
-    )
+        ])
     expect(maxActive).toBe(2)
   })
 
   test("destructive rail bypasses classify queue while serialize lock is held", async () => {
-    const release = await Effect.runPromise(Deferred.make<void>())
-    const entered = await Effect.runPromise(Deferred.make<void>())
-    const slow = Effect.gen(function* () {
-      yield* Deferred.succeed(entered, undefined)
-      yield* Deferred.await(release)
-      return lowRisk("held")
+    let releaseSlow: (() => void) | undefined
+    let markEntered: (() => void) | undefined
+    const release = new Promise<void>((resolve) => {
+      releaseSlow = resolve
     })
+    const entered = new Promise<void>((resolve) => {
+      markEntered = resolve
+    })
+    const slow = async () => {
+      markEntered?.()
+      await release
+      return lowRisk("held")
+    }
     const opts = {
       fallback: "ask" as const,
       allowlist: ["bash"],
@@ -2141,48 +2081,43 @@ describe("classifier contract", () => {
       parallel_classify: false,
       classify_gap_ms: 0,
     }
-    const fiber = Effect.runFork(
-      runClassifier({
-        paths: TEST_PATHS,
-        permission: "bash",
-        patterns: ["ls"],
-        opts,
-        classify: slow,
-        modelRef: "opencode/deepseek-v4-flash",
-      }),
-    )
-    await Effect.runPromise(Deferred.await(entered))
+    const held = runClassifier({
+      paths: TEST_PATHS,
+      permission: "bash",
+      patterns: ["ls"],
+      opts,
+      classify: slow,
+      modelRef: "opencode/deepseek-v4-flash",
+    })
+    await entered
 
-    const rail = await Effect.runPromise(
-      runClassifier({
+    const rail = await runClassifier({
         paths: TEST_PATHS,
         permission: "bash",
         patterns: ["rm -rf /tmp/x"],
         opts,
-        classify: Effect.succeed(lowRisk("should not run")),
+        classify: async () => (lowRisk("should not run")),
         modelRef: "opencode/deepseek-v4-flash",
-      }),
-    )
+      })
     expect(rail).toEqual({
       decision: "deny",
       reason: "Recursive force delete (rm -rf) is blocked",
     })
 
-    await Effect.runPromise(Deferred.succeed(release, undefined))
-    await Effect.runPromise(Fiber.join(fiber))
+    releaseSlow?.()
+    await held
   })
 
   test("dynamic allow cache hit skips classifier", async () => {
     clearDynamicLists()
     const cacheScope = "workspace\0session\0prompt"
     let calls = 0
-    const classify = Effect.sync(() => {
+    const classify = async () => {
       calls += 1
       return lowRisk("safe read-only command")
-    })
+    }
     const opts = { fallback: "ask" as const, allowlist: ["bash"], timeout_ms: 1000 }
-    const first = await Effect.runPromise(
-      runClassifier({
+    const first = await runClassifier({
         paths: TEST_PATHS,
         permission: "bash",
         patterns: ["ls"],
@@ -2191,13 +2126,11 @@ describe("classifier contract", () => {
         modelRef: "opencode/deepseek-v4-flash",
         metadata: { command: "ls" },
         cacheScope,
-      }),
-    )
+      })
     expect(first).toEqual(reviewed("allow", "low", "medium", "safe read-only command"))
     expect(calls).toBe(1)
 
-    const second = await Effect.runPromise(
-      runClassifier({
+    const second = await runClassifier({
         paths: TEST_PATHS,
         permission: "bash",
         patterns: ["ls"],
@@ -2206,8 +2139,7 @@ describe("classifier contract", () => {
         modelRef: "opencode/deepseek-v4-flash",
         metadata: { command: "ls" },
         cacheScope,
-      }),
-    )
+      })
     expect(calls).toBe(1)
     expect(second).toEqual({ decision: "allow", reason: CACHED_ALLOW_REASON })
   })
@@ -2216,13 +2148,12 @@ describe("classifier contract", () => {
     clearDynamicLists()
     const cacheScope = "workspace\0session\0prompt"
     let calls = 0
-    const classify = Effect.sync(() => {
+    const classify = async () => {
       calls += 1
       return highRiskLowIntent("risky")
-    })
+    }
     const opts = { fallback: "ask" as const, allowlist: ["bash"], timeout_ms: 1000 }
-    await Effect.runPromise(
-      runClassifier({
+    await runClassifier({
         paths: TEST_PATHS,
         permission: "bash",
         patterns: ["curl http://evil"],
@@ -2230,10 +2161,8 @@ describe("classifier contract", () => {
         classify,
         modelRef: "opencode/deepseek-v4-flash",
         cacheScope,
-      }),
-    )
-    const second = await Effect.runPromise(
-      runClassifier({
+      })
+    const second = await runClassifier({
         paths: TEST_PATHS,
         permission: "bash",
         patterns: ["curl http://evil"],
@@ -2241,8 +2170,7 @@ describe("classifier contract", () => {
         classify,
         modelRef: "opencode/deepseek-v4-flash",
         cacheScope,
-      }),
-    )
+      })
     expect(calls).toBe(2)
     expect(second).toEqual(reviewed("deny", "high", "low", "risky"))
   })
@@ -2251,17 +2179,16 @@ describe("classifier contract", () => {
     clearDynamicLists()
     const cacheScope = "workspace\0session\0prompt"
     let calls = 0
-    const classify = Effect.sync(() => {
+    const classify = async () => {
       calls += 1
       return {
         risk: "medium" as const,
         intent: "medium" as const,
         reason: "Recoverable edit with ambiguous intent.",
       }
-    })
+    }
     const opts = { fallback: "ask" as const, allowlist: ["edit"], timeout_ms: 1000 }
-    const first = await Effect.runPromise(
-      runClassifier({
+    const first = await runClassifier({
         paths: TEST_PATHS,
         permission: "edit",
         patterns: ["src/foo.ts"],
@@ -2270,15 +2197,13 @@ describe("classifier contract", () => {
         modelRef: "opencode/deepseek-v4-flash",
         hasExplicitPrompt: true,
         cacheScope,
-      }),
-    )
+      })
     expect(first).toEqual(
       reviewed("allow", "medium", "medium", "Recoverable edit with ambiguous intent."),
     )
     expect(calls).toBe(1)
 
-    const second = await Effect.runPromise(
-      runClassifier({
+    const second = await runClassifier({
         paths: TEST_PATHS,
         permission: "edit",
         patterns: ["src/foo.ts"],
@@ -2287,8 +2212,7 @@ describe("classifier contract", () => {
         modelRef: "opencode/deepseek-v4-flash",
         hasExplicitPrompt: true,
         cacheScope,
-      }),
-    )
+      })
     expect(calls).toBe(2)
     expect(second).toEqual(
       reviewed("allow", "medium", "medium", "Recoverable edit with ambiguous intent."),
@@ -2300,20 +2224,18 @@ describe("classifier contract", () => {
     const cacheScope = "workspace\0session\0prompt"
     resetDynamicListsForTests({ allow: [key], deny: [key] }, cacheScope)
     let called = false
-    const outcome = await Effect.runPromise(
-      runClassifier({
+    const outcome = await runClassifier({
         paths: TEST_PATHS,
         permission: "bash",
         patterns: ["echo hi"],
         opts: { fallback: "ask", allowlist: ["bash"], timeout_ms: 1000 },
-        classify: Effect.sync(() => {
+        classify: async () => {
           called = true
           return lowRisk("should not run")
-        }),
+        },
         modelRef: "opencode/deepseek-v4-flash",
         cacheScope,
-      }),
-    )
+      })
     expect(called).toBe(false)
     expect(outcome).toEqual({ decision: "deny", reason: CACHED_DENY_REASON })
   })
@@ -2328,52 +2250,46 @@ describe("classifier contract", () => {
       dynamic_list: { max_size: 2 },
     }
     for (const pattern of ["a", "b", "c"]) {
-      await Effect.runPromise(
-        runClassifier({
+      await runClassifier({
           paths: TEST_PATHS,
           permission: "bash",
           patterns: [pattern],
           opts,
-          classify: Effect.succeed(lowRisk(pattern)),
+          classify: async () => (lowRisk(pattern)),
           modelRef: "opencode/deepseek-v4-flash",
           cacheScope,
-        }),
-      )
+        })
     }
 
     let calls = 0
     // "a" should have been evicted; "b" and "c" remain
-    const miss = await Effect.runPromise(
-      runClassifier({
+    const miss = await runClassifier({
         paths: TEST_PATHS,
         permission: "bash",
         patterns: ["a"],
         opts,
-        classify: Effect.sync(() => {
+        classify: async () => {
           calls += 1
           return lowRisk("relearn a")
-        }),
+        },
         modelRef: "opencode/deepseek-v4-flash",
         cacheScope,
-      }),
-    )
+      })
     expect(calls).toBe(1)
     expect(miss.reason).toBe("relearn a")
 
-    const hit = await Effect.runPromise(
-      runClassifier({
+    const hit = await runClassifier({
         paths: TEST_PATHS,
         permission: "bash",
         patterns: ["c"],
         opts,
-        classify: Effect.sync(() => {
+        classify: async () => {
           calls += 1
           return highRiskLowIntent("should not run")
-        }),
+        },
         modelRef: "opencode/deepseek-v4-flash",
         cacheScope,
-      }),
-    )
+      })
     expect(calls).toBe(1)
     expect(hit).toEqual({ decision: "allow", reason: CACHED_ALLOW_REASON })
   })
@@ -2383,20 +2299,18 @@ describe("classifier contract", () => {
     const cacheScope = "workspace\0session\0prompt"
     resetDynamicListsForTests({ allow: [key] }, cacheScope)
     let called = false
-    const outcome = await Effect.runPromise(
-      runClassifier({
+    const outcome = await runClassifier({
         paths: TEST_PATHS,
         permission: "bash",
         patterns: ["rm -rf /tmp/foo"],
         opts: { fallback: "ask", allowlist: ["bash"], timeout_ms: 1000 },
-        classify: Effect.sync(() => {
+        classify: async () => {
           called = true
           return lowRisk("should not run")
-        }),
+        },
         modelRef: "opencode/deepseek-v4-flash",
         cacheScope,
-      }),
-    )
+      })
     expect(called).toBe(false)
     expect(outcome).toEqual({
       decision: "deny",
@@ -2408,17 +2322,16 @@ describe("classifier contract", () => {
     clearDynamicLists()
     const cacheScope = "workspace\0session\0prompt"
     let calls = 0
-    const classify = Effect.sync(() => {
+    const classify = async () => {
       calls += 1
       return lowRisk("would allow")
-    })
+    }
     const opts = {
       fallback: "ask" as const,
       allowlist: [] as string[],
       timeout_ms: 1000,
     }
-    const first = await Effect.runPromise(
-      runClassifier({
+    const first = await runClassifier({
         paths: TEST_PATHS,
         permission: "bash",
         patterns: ["ls"],
@@ -2426,11 +2339,9 @@ describe("classifier contract", () => {
         classify,
         modelRef: "opencode/deepseek-v4-flash",
         cacheScope,
-      }),
-    )
+      })
     expect(first.decision).toBe("deny")
-    const second = await Effect.runPromise(
-      runClassifier({
+    const second = await runClassifier({
         paths: TEST_PATHS,
         permission: "bash",
         patterns: ["ls"],
@@ -2438,8 +2349,7 @@ describe("classifier contract", () => {
         classify,
         modelRef: "opencode/deepseek-v4-flash",
         cacheScope,
-      }),
-    )
+      })
     expect(calls).toBe(1)
     expect(second).toEqual({ decision: "deny", reason: CACHED_DENY_REASON })
   })
@@ -2448,35 +2358,31 @@ describe("classifier contract", () => {
     clearDynamicLists()
     const cacheScope = "workspace\0session\0prompt"
     let calls = 0
-    const classify = Effect.sync(() => {
+    const classify = async () => {
       calls += 1
       return { risk: "high" as const, intent: "medium" as const, reason: "High-impact action is only implied." }
-    })
+    }
     const opts = {
       fallback: "deny" as const,
       allowlist: ["bash"],
       timeout_ms: 1000,
     }
-    const first = await Effect.runPromise(
-      runClassifier({
+    const first = await runClassifier({
         paths: TEST_PATHS,
         permission: "bash",
         patterns: ["deploy production"],
         opts,
         classify,
         cacheScope,
-      }),
-    )
-    const second = await Effect.runPromise(
-      runClassifier({
+      })
+    const second = await runClassifier({
         paths: TEST_PATHS,
         permission: "bash",
         patterns: ["deploy production"],
         opts,
         classify,
         cacheScope,
-      }),
-    )
+      })
     expect(first).toEqual(reviewed("deny", "high", "medium", "High-impact action is only implied."))
     expect(second).toEqual(reviewed("deny", "high", "medium", "High-impact action is only implied."))
     expect(calls).toBe(2)
@@ -2485,22 +2391,20 @@ describe("classifier contract", () => {
   test("dynamic decisions are isolated by workspace session and prompt scope", async () => {
     clearDynamicLists()
     let calls = 0
-    const classify = Effect.sync(() => {
+    const classify = async () => {
       calls += 1
       return lowRisk(`review ${calls}`)
-    })
+    }
     const opts = { allowlist: ["bash"], timeout_ms: 1000 }
     const run = (cacheScope: string) =>
-      Effect.runPromise(
-        runClassifier({
+      runClassifier({
           paths: TEST_PATHS,
           permission: "bash",
           patterns: ["ls"],
           opts,
           classify,
           cacheScope,
-        }),
-      )
+        })
 
     await run("workspace-a\0session-a\0prompt-a")
     await run("workspace-b\0session-b\0prompt-b")
@@ -2522,33 +2426,29 @@ describe("classifier contract", () => {
   test("clearDynamicLists drops learned entries for a new prompt", async () => {
     clearDynamicLists()
     const cacheScope = "workspace\0session\0prompt"
-    await Effect.runPromise(
-      runClassifier({
+    await runClassifier({
         paths: TEST_PATHS,
         permission: "bash",
         patterns: ["deploy --dry-run"],
         opts: { fallback: "ask", allowlist: ["bash"], timeout_ms: 1000 },
-        classify: Effect.succeed(lowRisk("ok")),
+        classify: async () => (lowRisk("ok")),
         modelRef: "opencode/deepseek-v4-flash",
         cacheScope,
-      }),
-    )
+      })
     clearDynamicLists()
     let calls = 0
-    const outcome = await Effect.runPromise(
-      runClassifier({
+    const outcome = await runClassifier({
         paths: TEST_PATHS,
         permission: "bash",
         patterns: ["deploy --dry-run"],
         opts: { fallback: "ask", allowlist: ["bash"], timeout_ms: 1000 },
-        classify: Effect.sync(() => {
+        classify: async () => {
           calls += 1
           return lowRisk("again")
-        }),
+        },
         modelRef: "opencode/deepseek-v4-flash",
         cacheScope,
-      }),
-    )
+      })
     expect(calls).toBe(1)
     expect(outcome.reason).toBe("again")
   })
@@ -2557,18 +2457,17 @@ describe("classifier contract", () => {
     clearDynamicLists()
     const cacheScope = "workspace\0session\0prompt"
     let calls = 0
-    const classify = Effect.sync(() => {
+    const classify = async () => {
       calls += 1
       return lowRisk("ok")
-    })
+    }
     const opts = {
       fallback: "ask" as const,
       allowlist: ["bash"],
       timeout_ms: 1000,
       dynamic_list: { enabled: false },
     }
-    await Effect.runPromise(
-      runClassifier({
+    await runClassifier({
         paths: TEST_PATHS,
         permission: "bash",
         patterns: ["ls"],
@@ -2576,10 +2475,8 @@ describe("classifier contract", () => {
         classify,
         modelRef: "opencode/deepseek-v4-flash",
         cacheScope,
-      }),
-    )
-    await Effect.runPromise(
-      runClassifier({
+      })
+    await runClassifier({
         paths: TEST_PATHS,
         permission: "bash",
         patterns: ["ls"],
@@ -2587,18 +2484,17 @@ describe("classifier contract", () => {
         classify,
         modelRef: "opencode/deepseek-v4-flash",
         cacheScope,
-      }),
-    )
+      })
     expect(calls).toBe(2)
   })
 
   test("missing cache scope disables process-global learning", async () => {
     clearDynamicLists()
     let calls = 0
-    const classify = Effect.sync(() => {
+    const classify = async () => {
       calls += 1
       return lowRisk("ok")
-    })
+    }
     const input = {
       paths: TEST_PATHS,
       permission: "bash",
@@ -2606,8 +2502,8 @@ describe("classifier contract", () => {
       opts: { allowlist: ["bash"], timeout_ms: 1000 },
       classify,
     }
-    await Effect.runPromise(runClassifier(input))
-    await Effect.runPromise(runClassifier(input))
+    await runClassifier(input)
+    await runClassifier(input)
     expect(calls).toBe(2)
   })
 })

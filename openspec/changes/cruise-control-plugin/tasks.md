@@ -40,11 +40,11 @@
 - [x] 5.2 Replace `@kancode/core/global` usage with `input.paths` and inline the path-containment helper, dropping `@kancode/core/fs-util`
 - [x] 5.3 Read config through a short-TTL `client.config.get()` instead of `@/config/config`, preserving immediate effect when the model is changed at runtime
 - [x] 5.4 Duplicate `explicitApprovalIntent` and its affirmation helpers into the classifier, and document the `<conversation_context>` envelope as a host↔plugin contract in the permission-modules spec
-- [ ] 5.5 Rewrite the classifier's Effect usage as plain async/await with a hand-rolled semaphore, removing the `effect` dependency entirely
+- [x] 5.5 Rewrite the classifier's Effect usage as plain async/await with a hand-rolled semaphore, removing the `effect` dependency entirely
 - [x] 5.6 Delete `ensureDefaultInstructions` and its tests so defaults are applied at classification time but never written to config
 - [x] 5.7 Change the unset-model outcome from deny to ask with a hint naming the model command, matching the shipped skill documentation
-- [ ] 5.8 Add a check (test or lint rule) asserting the classifier directory imports only `@kancode/plugin` and node builtins
-- [ ] 5.9 Run `bun typecheck` and `bun test` in `packages/kancode`
+- [x] 5.8 Add a check (test or lint rule) asserting the classifier directory imports only `@kancode/plugin` and node builtins
+- [x] 5.9 Run `bun typecheck` and `bun test` in `packages/kancode`
 
 ## 6. Extract And Publish The Plugin
 
@@ -59,7 +59,7 @@
 ## 7. Seed By Default And Remove The In-Tree Copy
 
 - [ ] 7.1 Delete the in-tree classifier sources, its lazy-load block in `packages/kancode/src/plugin/index.ts`, and the cruise command builder in the TUI package
-- [ ] 7.2 Move the `cruisecontrol` agent prompt and permission defaults to `packages/kancode/src/agent/cruise-control.ts` so nothing remains under the old plugin directory
+- [x] 7.2 Move the `cruisecontrol` agent prompt and permission defaults to `packages/kancode/src/agent/cruise-control.ts` so nothing remains under the old plugin directory
 - [ ] 7.3 Implement `packages/kancode/src/plugin/default-plugins.ts` seeding into global config after the global merge and before plugin origins are computed, gated on default-plugins-enabled and non-pure mode, with installation on a detached fiber
 - [ ] 7.4 Record seeding in a state-directory marker so a user-deleted entry is never resurrected, and honor the config-level disable from task 3.3 independently
 - [ ] 7.5 Write the seeded entry unpinned, and leave any pre-existing user entry untouched

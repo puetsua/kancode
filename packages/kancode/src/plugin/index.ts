@@ -287,9 +287,13 @@ const layer = Layer.effect(
         }
 
         if (!flags.disableDefaultPlugins) {
-          // Lazy import: classifier depends on Provider, which depends on Plugin.
           const { createCruiseControlPlugin } = yield* Effect.promise(() => import("./cruise-control"))
-          const cruise = createCruiseControlPlugin(bridge)
+          // The classifier is host-agnostic; bridge its diagnostics onto the
+          // structured logger so in-tree behavior is unchanged.
+          const cruise = createCruiseControlPlugin({
+            info: (message, data) => bridge.fork(Effect.logInfo(message, data)),
+            warn: (message, data) => bridge.fork(Effect.logWarning(message, data)),
+          })
           const init = yield* Effect.tryPromise({
             try: () => cruise({ ...input, model: modelFor("internal:cruise-control") }),
             catch: errorMessage,

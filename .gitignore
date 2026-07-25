@@ -34,3 +34,6 @@ logs/
 tsconfig.tsbuildinfo
 
 *.heapsnapshot
+
+# Local-only helper, not part of the repo
+script/transfer-npm-org.ps1

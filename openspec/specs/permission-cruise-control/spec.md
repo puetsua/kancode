@@ -89,12 +89,17 @@ The `cruise_control` module MUST apply `timeout_ms`, `fallback`, `allowlist`, an
 
 ### Requirement: Per-Prompt Dynamic Allow/Deny Lists
 
-The `cruise_control` module SHALL maintain separate in-memory allow and deny action lists learned from successful classifier outcomes after safety rails. Before invoking the LLM, the module MUST check the deny list then the allow list. A deny-list hit MUST return deny with reason indicating a cached deny. An allow-list hit MUST return allow only when safety rails still permit auto-allow; otherwise it MUST escalate without treating the hit as a durable allow. Ask outcomes, classifier failures, and fallbacks MUST NOT be cached. Destructive auto-deny and managed-directory auto-allow MUST still run before dynamic-list lookup and MUST NOT require the LLM. The lists MUST be cleared when a new user prompt starts (`chat.message`) and MUST NOT persist across prompt turns or to config/state files by default. Configuration under `permission_modules.cruise_control.dynamic_list` MAY disable the feature or set a max size (oldest entries evicted).
+The `cruise_control` module SHALL maintain separate in-memory allow and deny action lists learned from successful **low-risk** classifier outcomes after safety rails. Medium-risk and high-risk judgments MUST NOT be cached, even when the derived decision is allow (for example via high intent or medium/medium). Before invoking the LLM, the module MUST check the deny list then the allow list. A deny-list hit MUST return deny with reason indicating a cached deny. An allow-list hit MUST return allow only when safety rails still permit auto-allow; otherwise it MUST escalate without treating the hit as a durable allow. Ask outcomes, classifier failures, fallbacks, and non-low-risk decisions MUST NOT be cached. Destructive auto-deny and managed-directory auto-allow MUST still run before dynamic-list lookup and MUST NOT require the LLM. The lists MUST be cleared when a new user prompt starts (`chat.message`) and MUST NOT persist across prompt turns or to config/state files by default. Configuration under `permission_modules.cruise_control.dynamic_list` MAY disable the feature or set a max size (oldest entries evicted).
 
 #### Scenario: Cache hit skips LLM within a prompt turn
-- **WHEN** the classifier previously allowed a permission key+patterns within the current user-prompt turn
+- **WHEN** the classifier previously allowed a permission key+patterns with `risk: low` within the current user-prompt turn
 - **AND** the same key is evaluated again before the next user prompt
 - **THEN** the module returns allow with a cached-allow reason without calling the classifier LLM
+
+#### Scenario: Medium or high risk is not cached
+- **WHEN** the classifier returns `risk: medium` or `risk: high` for a permission key
+- **AND** the same key is evaluated again within the current user-prompt turn
+- **THEN** the module invokes the classifier LLM again and MUST NOT return a cached-allow or cached-deny reason
 
 #### Scenario: Deny wins over allow
 - **WHEN** the same action key is present on both dynamic lists

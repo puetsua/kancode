@@ -677,7 +677,15 @@ export const runClassifier = Effect.fn("CruiseControl.runClassifier")(function* 
     ),
   )
 
-  if (input.cacheScope && outcome.learned && (outcome.decision === "allow" || outcome.decision === "deny")) {
+  // Only learn low-risk judgments. Medium/high allows (via intent) and higher-risk
+  // denies must re-classify so context-sensitive intent is not sticky within the turn.
+  if (
+    input.cacheScope &&
+    outcome.learned &&
+    "risk" in outcome &&
+    outcome.risk === "low" &&
+    (outcome.decision === "allow" || outcome.decision === "deny")
+  ) {
     rememberDynamic(key, outcome.decision, listOpts, input.cacheScope)
   }
 

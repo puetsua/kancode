@@ -59,7 +59,7 @@ import { Config } from "../../src/config/config"
 import { Provider } from "../../src/provider/provider"
 import { TestConfig } from "../fixture/config"
 import { runPluginPermissionModule } from "../../src/plugin"
-import { createCruiseControlPlugin } from "../../src/plugin/cruise-control"
+import { createCruiseControlPlugin, makeOptionsReader, CONFIG_TTL_MS } from "../../src/plugin/cruise-control"
 import { EffectBridge } from "../../src/effect/bridge"
 import { fakePluginInput } from "../fixture/plugin"
 
@@ -773,8 +773,6 @@ const itMissingModel = testEffect(missingModelEnv)
 itMissingModel.instance("unset cruise_control model asks with a configuration hint", () =>
   Effect.gen(function* () {
     const modules = yield* PermissionModule.Service
-    const config = yield* Config.Service
-    const provider = yield* Provider.Service
     const unregister = modules.registerSync({
       id: PermissionModuleSchema.CRUISE_CONTROL,
       decide: (input) =>
@@ -782,12 +780,13 @@ itMissingModel.instance("unset cruise_control model asks with a configuration hi
         decideCruiseControl({
           ...input,
           paths: TEST_PATHS,
+          options: undefined,
           model: {
             generate: async () => {
               throw new Error("classifier must not call the model when none is configured")
             },
           },
-        }).pipe(Effect.provideService(Config.Service, config), Effect.provideService(Provider.Service, provider)),
+        }),
     })
     expect(
       yield* modules.decide({
@@ -1279,6 +1278,74 @@ describe("classifier contract", () => {
     )
     expect(managedAppDirectoryAllow("external_directory", [homeConfig], Global.Path)).toBeUndefined()
     expect(managedAppDirectoryAllow("read", [configGlob], Global.Path)).toBeUndefined()
+  })
+
+  describe("cruise_control options reader", () => {
+    function clientWith(models: string[]) {
+      let call = 0
+      const calls = () => call
+      return {
+        calls,
+        client: {
+          config: {
+            get: async () => {
+              const model = models[Math.min(call, models.length - 1)]
+              call += 1
+              return { data: { permission_modules: { cruise_control: { model } } } }
+            },
+          },
+        } as unknown as Parameters<typeof makeOptionsReader>[0],
+      }
+    }
+
+    test("reuses a config read inside the TTL window", async () => {
+      const { client, calls } = clientWith(["opencode/a"])
+      let clock = 1_000
+      const read = makeOptionsReader(client, () => clock)
+      expect((await read())?.model).toBe("opencode/a")
+      clock += CONFIG_TTL_MS - 1
+      expect((await read())?.model).toBe("opencode/a")
+      expect(calls()).toBe(1)
+    })
+
+    // Guards the reason this does not use the `config` hook: that fires once at
+    // init, so a model chosen mid-session would need a restart to apply.
+    test("picks up a model changed mid-session once the TTL lapses", async () => {
+      const { client, calls } = clientWith(["opencode/a", "opencode/b"])
+      let clock = 1_000
+      const read = makeOptionsReader(client, () => clock)
+      expect((await read())?.model).toBe("opencode/a")
+      clock += CONFIG_TTL_MS
+      expect((await read())?.model).toBe("opencode/b")
+      expect(calls()).toBe(2)
+    })
+
+    test("keeps the last good value when a config read fails", async () => {
+      let fail = false
+      let clock = 1_000
+      const client = {
+        config: {
+          get: async () => {
+            if (fail) throw new Error("server down")
+            return { data: { permission_modules: { cruise_control: { model: "opencode/a" } } } }
+          },
+        },
+      } as unknown as Parameters<typeof makeOptionsReader>[0]
+      const read = makeOptionsReader(client, () => clock)
+      expect((await read())?.model).toBe("opencode/a")
+      fail = true
+      clock += CONFIG_TTL_MS
+      expect((await read())?.model).toBe("opencode/a")
+    })
+
+    test("collapses concurrent reads into one request", async () => {
+      const { client, calls } = clientWith(["opencode/a"])
+      const read = makeOptionsReader(client, () => 1_000)
+      const [first, second] = await Promise.all([read(), read()])
+      expect(first?.model).toBe("opencode/a")
+      expect(second?.model).toBe("opencode/a")
+      expect(calls()).toBe(1)
+    })
   })
 
   describe("preserveModuleReview", () => {

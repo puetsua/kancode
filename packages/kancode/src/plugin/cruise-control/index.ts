@@ -3,6 +3,46 @@ import { PermissionModule as PermissionModuleSchema } from "@kancode/schema/perm
 import { EffectBridge } from "@/effect/bridge"
 import { clearDynamicLists, decideCruiseControl } from "./classifier"
 
+/** Window during which a config read is reused. Long enough to absorb a burst of
+ * parallel classifications, short enough that `/cruise-control-model` takes effect
+ * without a restart. */
+const CONFIG_TTL_MS = 5_000
+
+/**
+ * Reads `permission_modules.cruise_control` per decision through the public SDK.
+ *
+ * Deliberately not the `config` hook: that fires once at plugin init, so a model
+ * chosen mid-session would not apply until restart.
+ */
+function makeOptionsReader(client: PluginInput["client"], now: () => number = Date.now) {
+  // -Infinity, not 0: with 0 the first call looks fresh whenever the clock reads
+  // below the TTL, and would hand back the empty cache instead of fetching.
+  let cachedAt = Number.NEGATIVE_INFINITY
+  let cached: PermissionModuleSchema.Options | undefined
+  let inflight: Promise<PermissionModuleSchema.Options | undefined> | undefined
+
+  return async () => {
+    if (now() - cachedAt < CONFIG_TTL_MS) return cached
+    inflight ??= client.config
+      .get()
+      .then((response) => {
+        const config = ((response as { data?: unknown }).data ?? response) as
+          | { permission_modules?: Record<string, PermissionModuleSchema.Options> }
+          | undefined
+        return config?.permission_modules?.[PermissionModuleSchema.CRUISE_CONTROL]
+      })
+      .catch(() => cached)
+      .finally(() => {
+        inflight = undefined
+      })
+    cached = await inflight
+    cachedAt = now()
+    return cached
+  }
+}
+
+export { makeOptionsReader, CONFIG_TTL_MS }
+
 /**
  * Built-in Cruise Control plugin: registers permission module `cruise_control`
  * via the public `permission.registerModule` API.
@@ -19,6 +59,7 @@ import { clearDynamicLists, decideCruiseControl } from "./classifier"
  */
 export function createCruiseControlPlugin(bridge: EffectBridge.Shape): Plugin {
   return async (input: PluginInput): Promise<Hooks> => {
+    const readOptions = makeOptionsReader(input.client)
     input.permission.registerModule({
       id: PermissionModuleSchema.CRUISE_CONTROL,
       decide: async (req) => {
@@ -26,6 +67,7 @@ export function createCruiseControlPlugin(bridge: EffectBridge.Shape): Plugin {
           decideCruiseControl({
             model: input.model,
             paths: input.paths,
+            options: await readOptions(),
             moduleID: PermissionModuleSchema.CRUISE_CONTROL,
             permission: req.permission,
             patterns: req.patterns,

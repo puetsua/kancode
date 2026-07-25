@@ -3,8 +3,7 @@ import { PermissionModule as PermissionModuleSchema } from "@kancode/schema/perm
 import { isModelGenerateError, type ModelCapability, type ModelMessage, type PluginPaths } from "@kancode/plugin"
 import { Duration, Effect, Schedule, Semaphore } from "effect"
 import path from "path"
-import { explicitApprovalIntent } from "@/session/cruise-control-prompt"
-import { Config } from "@/config/config"
+import { explicitApprovalIntent } from "./approval"
 import { actionKey, CACHED_ALLOW_REASON, CACHED_DENY_REASON, lookupDynamic, rememberDynamic } from "./dynamic-list"
 import { destructiveReason } from "./destructive"
 import { deriveInstructionIntent } from "./instruction-intent"
@@ -741,11 +740,14 @@ async function generateClassifierObject(input: {
 
 /** Effect decide handler for the built-in cruise_control permission module. */
 export const decideCruiseControl = Effect.fn("CruiseControl.decide")(function* (
-  input: DecideInput & { model: ModelCapability; paths: PluginPaths },
+  input: DecideInput & {
+    model: ModelCapability
+    paths: PluginPaths
+    /** Resolved `permission_modules.cruise_control`; read fresh per decision by the caller. */
+    options: PermissionModuleSchema.Options | undefined
+  },
 ) {
-  const config = yield* Config.Service
-  const cfg = yield* config.get()
-  const opts = cfg.permission_modules?.[PermissionModuleSchema.CRUISE_CONTROL]
+  const opts = input.options
   const modelRef = opts?.model?.trim()
 
   if (!modelRef) {

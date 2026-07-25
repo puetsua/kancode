@@ -38,8 +38,8 @@
 
 - [x] 5.1 Replace the generated classifier JSON Schema with a hand-written literal, dropping the `@/tool/json-schema` import
 - [x] 5.2 Replace `@kancode/core/global` usage with `input.paths` and inline the path-containment helper, dropping `@kancode/core/fs-util`
-- [ ] 5.3 Read config through a short-TTL `client.config.get()` instead of `@/config/config`, preserving immediate effect when the model is changed at runtime
-- [ ] 5.4 Duplicate `explicitApprovalIntent` and its affirmation helpers into the classifier, and document the `<conversation_context>` envelope as a host↔plugin contract in the permission-modules spec
+- [x] 5.3 Read config through a short-TTL `client.config.get()` instead of `@/config/config`, preserving immediate effect when the model is changed at runtime
+- [x] 5.4 Duplicate `explicitApprovalIntent` and its affirmation helpers into the classifier, and document the `<conversation_context>` envelope as a host↔plugin contract in the permission-modules spec
 - [ ] 5.5 Rewrite the classifier's Effect usage as plain async/await with a hand-rolled semaphore, removing the `effect` dependency entirely
 - [x] 5.6 Delete `ensureDefaultInstructions` and its tests so defaults are applied at classification time but never written to config
 - [x] 5.7 Change the unset-model outcome from deny to ask with a hint naming the model command, matching the shipped skill documentation

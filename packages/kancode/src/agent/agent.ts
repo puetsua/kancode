@@ -20,8 +20,8 @@ import {
   AGENT_ID as CRUISECONTROL_ID,
   AGENT_PROMPT as PROMPT_CRUISECONTROL,
   cruiseControlPermissionConfig,
+  managedAppDirectoryGlobs,
 } from "@/agent/cruise-control"
-import { managedAppDirectoryGlobs } from "@/plugin/cruise-control/classifier"
 import { mergeDeep, pipe, sortBy, values } from "remeda"
 import { Global } from "@kancode/core/global"
 import path from "path"
@@ -114,7 +114,7 @@ const layer = Layer.effect(
           : []
         const whitelistedDirs = [
           Truncate.GLOB,
-          ...managedAppDirectoryGlobs(Global.Path),
+          ...managedAppDirectoryGlobs(),
           ...skillDirs.map((dir) => path.join(dir, "*")),
           ...referenceDirs.map((dir) => path.join(dir, "*")),
         ]

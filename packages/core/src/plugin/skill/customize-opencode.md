@@ -301,13 +301,19 @@ opencode ships with `default`, `plan`, `cruisecontrol`, `general`, `explore`. Hi
 `compaction`, `title`, `summary`. To override a built-in's fields, define the
 same key in `agent: { <name>: { ... } }`. The legacy agent id `build` aliases to `default`.
 
-`cruisecontrol` is the CruiseControl agent (autonomous execution), registered by the
-built-in `cruise-control` plugin. Its default tool permissions use the `cruise_control`
-classifier module (`"*": "cruise_control"`). It uses normal chat model resolution
-(global/default) — do not conflate the agent id with the permission-module id.
+`cruisecontrol` is the CruiseControl agent (autonomous execution), built in to KanCode.
+Its default tool permissions use the `cruise_control` classifier module
+(`"*": "cruise_control"`). It uses normal chat model resolution (global/default) — do
+not conflate the agent id with the permission-module id.
 
-For smart tool auto-gating (including CruiseControl's defaults), use the built-in
-permission module `cruise_control` (also from the `cruise-control` plugin): set
+The `cruise_control` classifier itself ships separately as
+`@puetsua/kancode-cruise-control`, seeded into global config on first run and
+removable like any plugin. If it is not installed, rules naming `cruise_control`
+degrade to asking rather than denying, and the agent still works — it just asks
+more. Full option reference lives in that package's README.
+
+For smart tool auto-gating (including CruiseControl's defaults), use the
+permission module `cruise_control`: set
 permission actions to `"cruise_control"` and configure it with `/cruise-control-model`
 or `permission_modules.cruise_control.model` (for example `opencode/deepseek-v4-flash`
 or `ollama-cloud/kimi-k2.7-code`). If the model is unset, KanCode asks you to approve

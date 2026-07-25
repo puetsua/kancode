@@ -27,6 +27,7 @@ import { EffectBridge } from "@/effect/bridge"
 import { InstanceState } from "@/effect/instance-state"
 import { errorMessage } from "@/util/error"
 import { PluginLoader } from "./loader"
+import { DEFAULT_PLUGINS, seedDefaultPlugins } from "./default-plugins"
 import { makeModelCapability } from "./model"
 import { parsePluginSpecifier, readPluginId, readV1Plugin, resolvePluginId } from "./shared"
 import { registerAdapter } from "@/control-plane/adapters"
@@ -286,29 +287,29 @@ const layer = Layer.effect(
           if (init._tag === "Some") hooks.push(init.value)
         }
 
-        if (!flags.disableDefaultPlugins) {
-          const { createCruiseControlPlugin } = yield* Effect.promise(() => import("./cruise-control"))
-          // The classifier is host-agnostic; bridge its diagnostics onto the
-          // structured logger so in-tree behavior is unchanged.
-          const cruise = createCruiseControlPlugin({
-            info: (message, data) => bridge.fork(Effect.logInfo(message, data)),
-            warn: (message, data) => bridge.fork(Effect.logWarning(message, data)),
-          })
-          const init = yield* Effect.tryPromise({
-            try: () => cruise({ ...input, model: modelFor("internal:cruise-control") }),
-            catch: errorMessage,
-          }).pipe(
-            Effect.tapError((error) =>
-              Effect.logError("failed to load internal plugin", { name: "cruise-control", error }),
-            ),
-            Effect.option,
-          )
-          if (init._tag === "Some") hooks.push(init.value)
-        }
 
-        const plugins = flags.pure ? [] : (cfg.plugin_origins ?? [])
-        if (flags.pure && cfg.plugin_origins?.length) {
-        }
+        // Seed first-party plugins into global config once ever. The freshly
+        // written specs are appended to this boot's load list too, so the plugin
+        // activates immediately instead of on the next start.
+        const seeded =
+          flags.pure || flags.disableDefaultPlugins
+            ? []
+            : (yield* seedDefaultPlugins({ directory: ctx.directory, worktree: ctx.worktree }).pipe(
+                Effect.catchCause((cause) =>
+                  Effect.logWarning("default plugin seeding failed", { error: String(cause) }).pipe(
+                    Effect.as({ seeded: [] as string[] }),
+                  ),
+                ),
+              )).seeded
+
+        const configured = flags.pure ? [] : (cfg.plugin_origins ?? [])
+        const known = new Set(configured.map((origin) => origin.spec))
+        const plugins = [
+          ...configured,
+          ...seeded
+            .filter((spec) => !known.has(spec))
+            .map((spec) => ({ spec, source: "default", scope: "global" }) as (typeof configured)[number]),
+        ]
         if (plugins.length) yield* config.waitForDependencies()
 
         const loaded = yield* Effect.promise(() =>
@@ -325,6 +326,18 @@ const layer = Layer.effect(
 
                 if (stage === "install") {
                   const parsed = parsePluginSpecifier(spec)
+                  // Seeded plugins are opt-out, not user-requested: an offline start
+                  // must not open a red session error every launch. Permission rules
+                  // naming the missing module degrade to asking.
+                  if ((DEFAULT_PLUGINS as readonly string[]).includes(parsed.pkg)) {
+                    bridge.fork(
+                      Effect.logWarning("default plugin not installed; rules naming it will ask", {
+                        plugin: parsed.pkg,
+                        error: message,
+                      }),
+                    )
+                    return
+                  }
                   publishPluginError(`Failed to install plugin ${parsed.pkg}@${parsed.version}: ${message}`)
                   return
                 }

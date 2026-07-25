@@ -58,15 +58,15 @@
 
 ## 7. Seed By Default And Remove The In-Tree Copy
 
-- [ ] 7.1 Delete the in-tree classifier sources, its lazy-load block in `packages/kancode/src/plugin/index.ts`, and the cruise command builder in the TUI package
+- [x] 7.1 Delete the in-tree classifier sources, its lazy-load block in `packages/kancode/src/plugin/index.ts`, and the cruise command builder in the TUI package
 - [x] 7.2 Move the `cruisecontrol` agent prompt and permission defaults to `packages/kancode/src/agent/cruise-control.ts` so nothing remains under the old plugin directory
-- [ ] 7.3 Implement `packages/kancode/src/plugin/default-plugins.ts` seeding into global config after the global merge and before plugin origins are computed, gated on default-plugins-enabled and non-pure mode, with installation on a detached fiber
-- [ ] 7.4 Record seeding in a state-directory marker so a user-deleted entry is never resurrected, and honor the config-level disable from task 3.3 independently
-- [ ] 7.5 Write the seeded entry unpinned, and leave any pre-existing user entry untouched
-- [ ] 7.6 Downgrade install failures for seeded plugins from session errors to warnings so offline starts stay clean
+- [x] 7.3 Implement `packages/kancode/src/plugin/default-plugins.ts` seeding into global config after the global merge and before plugin origins are computed, gated on default-plugins-enabled and non-pure mode, with installation on a detached fiber
+- [x] 7.4 Record seeding in a state-directory marker so a user-deleted entry is never resurrected, and honor the config-level disable from task 3.3 independently
+- [x] 7.5 Write the seeded entry unpinned, and leave any pre-existing user entry untouched
+- [x] 7.6 Downgrade install failures for seeded plugins from session errors to warnings so offline starts stay clean
 - [ ] 7.7 Add a one-time upgrade notice explaining that Cruise Control is now an installing plugin
-- [ ] 7.8 Add `packages/kancode/test/plugin/default-plugins.test.ts` covering: first run writes both configs preserving comments; second run no-ops; marker present with entry deleted does not re-add; disabled or pure mode seeds nothing; an existing pinned entry is left alone
-- [ ] 7.9 Rewrite the affected sections of `openspec/specs/permission-cruise-control/spec.md` guidance and the `customize-opencode` skill, leaving a pointer to the plugin README
+- [x] 7.8 Add `packages/kancode/test/plugin/default-plugins.test.ts` covering: first run writes both configs preserving comments; second run no-ops; marker present with entry deleted does not re-add; disabled or pure mode seeds nothing; an existing pinned entry is left alone
+- [x] 7.9 Rewrite the affected sections of `openspec/specs/permission-cruise-control/spec.md` guidance and the `customize-opencode` skill, leaving a pointer to the plugin README
 - [ ] 7.10 Verify end to end: fresh config dir seeds and installs, classification works, then with the package cache removed the next start degrades to asking rather than denying
 - [ ] 7.11 Add a nightly CI job installing the published plugin and running one real classify against a cheap model
-- [ ] 7.12 Run `bun typecheck` and `bun test` in `packages/core`, `packages/kancode`, `packages/plugin`, and `packages/tui`
+- [x] 7.12 Run `bun typecheck` and `bun test` in `packages/core`, `packages/kancode`, `packages/plugin`, and `packages/tui`

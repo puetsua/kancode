@@ -1,3 +1,5 @@
+import path from "path"
+import { Global } from "@kancode/core/global"
 import { PermissionModule } from "@kancode/schema/permission-module"
 import PROMPT from "./cruise-control-prompt.txt"
 
@@ -21,4 +23,15 @@ export function cruiseControlPermissionConfig() {
     question: "allow" as const,
     plan_enter: "allow" as const,
   }
+}
+
+/**
+ * Glob patterns for agent `external_directory` allow rules covering KanCode's own
+ * app directories. Kept host-side: the agent ships with KanCode and must not
+ * depend on the cruise-control plugin being installed.
+ */
+export function managedAppDirectoryGlobs(): string[] {
+  return [Global.Path.config, Global.Path.data, Global.Path.cache, Global.Path.state, Global.Path.tmp].map((root) =>
+    path.join(root, "*"),
+  )
 }

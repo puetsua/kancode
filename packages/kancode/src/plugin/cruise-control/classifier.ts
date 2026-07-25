@@ -1,13 +1,10 @@
-import { FSUtil } from "@kancode/core/fs-util"
-import { Global } from "@kancode/core/global"
 import { PermissionModule as CorePermissionModule } from "@kancode/core/permission/module"
 import { PermissionModule as PermissionModuleSchema } from "@kancode/schema/permission-module"
-import { isModelGenerateError, type ModelCapability, type ModelMessage } from "@kancode/plugin"
-import { Duration, Effect, Schedule, Schema, Semaphore } from "effect"
+import { isModelGenerateError, type ModelCapability, type ModelMessage, type PluginPaths } from "@kancode/plugin"
+import { Duration, Effect, Schedule, Semaphore } from "effect"
 import path from "path"
 import { explicitApprovalIntent } from "@/session/cruise-control-prompt"
 import { Config } from "@/config/config"
-import { ToolJsonSchema } from "@/tool/json-schema"
 import { actionKey, CACHED_ALLOW_REASON, CACHED_DENY_REASON, lookupDynamic, rememberDynamic } from "./dynamic-list"
 import { destructiveReason } from "./destructive"
 import { deriveInstructionIntent } from "./instruction-intent"
@@ -27,14 +24,22 @@ export type DecideResult = CorePermissionModule.DecideResult
 export type ClassifierLevel = "high" | "medium" | "low"
 export type CruiseControlDecision = "allow" | "deny"
 
-const ClassifierResult = Schema.Struct({
-  risk: Schema.Literals(["high", "medium", "low"]),
-  intent: Schema.Literals(["high", "medium", "low"]),
-  reason: Schema.optionalKey(Schema.String),
-})
-
-/** JSON Schema for the model — reason optional so flaky models that omit it still parse. */
-const CLASSIFIER_JSON_SCHEMA = ToolJsonSchema.fromSchema(ClassifierResult)
+/**
+ * JSON Schema for the model — `reason` is optional so flaky models that omit it
+ * still parse. Written literally rather than derived from an Effect schema: the
+ * plugin model capability takes plain JSON Schema, and generating it would tie
+ * this module to the host's patched `effect` build.
+ */
+export const CLASSIFIER_JSON_SCHEMA = {
+  $schema: "https://json-schema.org/draft/2020-12/schema",
+  type: "object",
+  properties: {
+    risk: { type: "string", enum: ["high", "medium", "low"] },
+    intent: { type: "string", enum: ["high", "medium", "low"] },
+    reason: { type: "string" },
+  },
+  required: ["risk", "intent"],
+} as const
 
 const CLASSIFIER_LEVELS = new Set<ClassifierLevel>(["high", "medium", "low"])
 
@@ -101,7 +106,12 @@ export const DEFAULT_ALLOWLIST = [
   "external_directory",
 ] as const
 
-export const MISSING_MODEL_MESSAGE = "cruise_control model unset; denied. Run /cruise-control-model, then retry."
+/**
+ * An unset model is user configuration, not a safety failure, so it escalates to
+ * a human rather than hard-denying. A model that IS set but unresolvable still
+ * fails closed through the classifier path.
+ */
+export const MISSING_MODEL_MESSAGE = "cruise_control model unset. Run /cruise-control-model, then retry."
 
 const INSTRUCTION_SECTIONS = ["background", "allow", "conditional", "deny"] as const
 export type InstructionSection = (typeof INSTRUCTION_SECTIONS)[number]
@@ -259,22 +269,6 @@ export function hasCompleteInstructions(opts: PermissionModuleSchema.Options | u
  * Persist default instruction sections into global config when missing.
  * Does not overwrite a section the user already set (including empty arrays).
  */
-export const ensureDefaultInstructions = Effect.fn("CruiseControl.ensureDefaultInstructions")(function* () {
-  const config = yield* Config.Service
-  const global = yield* config.getGlobal()
-  const cruise = global.permission_modules?.[PermissionModuleSchema.CRUISE_CONTROL]
-  const merged = mergeInstructionsDefaults(cruise?.instructions)
-  if (!merged) return { changed: false as const }
-
-  return yield* config.updateGlobal({
-    permission_modules: {
-      [PermissionModuleSchema.CRUISE_CONTROL]: {
-        instructions: merged,
-      },
-    },
-  })
-})
-
 export type ClassifierObject = {
   risk: ClassifierLevel
   intent: ClassifierLevel
@@ -298,13 +292,13 @@ export function shortenReason(reason: string, max = 120): string {
 }
 
 /** Resolved KanCode user-scope roots (config/data/cache/state/tmp). */
-export function managedAppDirectoryRoots(): string[] {
-  return [Global.Path.config, Global.Path.data, Global.Path.cache, Global.Path.state, Global.Path.tmp]
+export function managedAppDirectoryRoots(paths: PluginPaths): string[] {
+  return [paths.config, paths.data, paths.cache, paths.state, paths.tmp]
 }
 
 /** Glob patterns for agent external_directory allow rules covering managed app dirs. */
-export function managedAppDirectoryGlobs(): string[] {
-  return managedAppDirectoryRoots().map((root) => path.join(root, "*"))
+export function managedAppDirectoryGlobs(paths: PluginPaths): string[] {
+  return managedAppDirectoryRoots(paths).map((root) => path.join(root, "*"))
 }
 
 function stripPermissionGlob(pattern: string): string {
@@ -314,21 +308,34 @@ function stripPermissionGlob(pattern: string): string {
   return normalized
 }
 
+/**
+ * True when `child` is `parent` or lives under it. Inlined rather than imported
+ * from `@kancode/core/fs-util`, which is private and unpublished.
+ */
+function contains(parent: string, child: string): boolean {
+  const result = path.relative(parent, child)
+  return result === "" || (!path.isAbsolute(result) && result !== ".." && !result.startsWith(`..${path.sep}`))
+}
+
 /** True when a permission pattern is inside (or equal to) a KanCode managed app directory. */
-export function isManagedAppDirectoryPattern(pattern: string): boolean {
+export function isManagedAppDirectoryPattern(pattern: string, paths: PluginPaths): boolean {
   const target = stripPermissionGlob(pattern)
   if (!target || target === "*" || target.includes("*") || target.includes("?")) return false
-  return managedAppDirectoryRoots().some((root) => FSUtil.contains(root, target))
+  return managedAppDirectoryRoots(paths).some((root) => contains(root, target))
 }
 
 /**
  * Deterministic allow for external_directory covering only the user's own KanCode app dirs.
  * Does not open arbitrary home / ~/.config access.
  */
-export function managedAppDirectoryAllow(permission: string, patterns: readonly string[]): string | undefined {
+export function managedAppDirectoryAllow(
+  permission: string,
+  patterns: readonly string[],
+  paths: PluginPaths,
+): string | undefined {
   if (permission !== "external_directory") return undefined
   if (patterns.length === 0) return undefined
-  if (!patterns.every(isManagedAppDirectoryPattern)) return undefined
+  if (!patterns.every((pattern) => isManagedAppDirectoryPattern(pattern, paths))) return undefined
   return "KanCode managed app directory access is allowed"
 }
 
@@ -486,6 +493,7 @@ export const runClassifier = Effect.fn("CruiseControl.runClassifier")(function* 
   patterns: readonly string[]
   opts: PermissionModuleSchema.Options | undefined
   classify: Effect.Effect<ClassifierObject, unknown>
+  paths: PluginPaths
   modelRef?: string
   metadata?: Record<string, unknown>
   cacheScope?: string
@@ -504,7 +512,7 @@ export const runClassifier = Effect.fn("CruiseControl.runClassifier")(function* 
     return { decision: "deny" as const, reason: destructive }
   }
 
-  const managed = managedAppDirectoryAllow(input.permission, input.patterns)
+  const managed = managedAppDirectoryAllow(input.permission, input.patterns, input.paths)
   if (managed) {
     const decision = applySafety("allow", input.permission, input.opts)
     const reason = decision === "allow" ? managed : "Denied by cruise_control safety rails"
@@ -713,7 +721,7 @@ async function generateClassifierObject(input: {
     const result = await input.model.generate({
       model: input.modelRef,
       messages: input.messages,
-      schema: CLASSIFIER_JSON_SCHEMA as Record<string, unknown>,
+      schema: CLASSIFIER_JSON_SCHEMA as unknown as Record<string, unknown>,
       schemaName: "cruise_control_assessment",
       schemaDescription: "Independent high, medium, or low assessments of tool-action risk and explicit user intent",
       temperature: 0,
@@ -733,7 +741,7 @@ async function generateClassifierObject(input: {
 
 /** Effect decide handler for the built-in cruise_control permission module. */
 export const decideCruiseControl = Effect.fn("CruiseControl.decide")(function* (
-  input: DecideInput & { model: ModelCapability },
+  input: DecideInput & { model: ModelCapability; paths: PluginPaths },
 ) {
   const config = yield* Config.Service
   const cfg = yield* config.get()
@@ -742,7 +750,7 @@ export const decideCruiseControl = Effect.fn("CruiseControl.decide")(function* (
 
   if (!modelRef) {
     yield* Effect.logWarning(MISSING_MODEL_MESSAGE)
-    return { decision: "deny" as const, reason: MISSING_MODEL_MESSAGE }
+    return { decision: "ask" as const, reason: MISSING_MODEL_MESSAGE }
   }
 
   const classify = Effect.gen(function* () {
@@ -774,6 +782,7 @@ export const decideCruiseControl = Effect.fn("CruiseControl.decide")(function* (
     patterns: input.patterns,
     opts,
     classify,
+    paths: input.paths,
     modelRef,
     metadata: input.metadata,
     cacheScope: input.cacheScope,

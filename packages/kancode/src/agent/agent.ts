@@ -114,7 +114,7 @@ const layer = Layer.effect(
           : []
         const whitelistedDirs = [
           Truncate.GLOB,
-          ...managedAppDirectoryGlobs(),
+          ...managedAppDirectoryGlobs(Global.Path),
           ...skillDirs.map((dir) => path.join(dir, "*")),
           ...referenceDirs.map((dir) => path.join(dir, "*")),
         ]

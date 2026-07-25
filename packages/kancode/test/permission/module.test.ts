@@ -18,7 +18,6 @@ import {
   DEFAULT_CLASSIFY_GAP_MS,
   DEFAULT_INSTRUCTIONS,
   resetClassifyGapForTests,
-  ensureDefaultInstructions,
   hasCompleteInstructions,
   mergeInstructionsDefaults,
   parseClassifierResult,
@@ -30,6 +29,7 @@ import {
   deriveInstructionIntent,
   destructiveReason,
   managedAppDirectoryAllow,
+  managedAppDirectoryGlobs,
   isManagedAppDirectoryPattern,
   sessionTodoAllow,
   sessionRenameAllow,
@@ -59,8 +59,20 @@ import { Config } from "../../src/config/config"
 import { Provider } from "../../src/provider/provider"
 import { TestConfig } from "../fixture/config"
 import { runPluginPermissionModule } from "../../src/plugin"
+import { createCruiseControlPlugin } from "../../src/plugin/cruise-control"
+import { EffectBridge } from "../../src/effect/bridge"
+import { fakePluginInput } from "../fixture/plugin"
 
 const noopBootstrap = Layer.succeed(InstanceBootstrap.Service, InstanceBootstrap.Service.of({ run: Effect.void }))
+
+/** Classifier app roots. Real Global paths so managed-directory rails behave as in production. */
+const TEST_PATHS = {
+  config: Global.Path.config,
+  data: Global.Path.data,
+  cache: Global.Path.cache,
+  state: Global.Path.state,
+  tmp: Global.Path.tmp,
+}
 
 function lowRisk(reason: string) {
   return { risk: "low" as const, intent: "medium" as const, reason }
@@ -758,7 +770,7 @@ const missingModelEnv = AppNodeBuilder.build(
 
 const itMissingModel = testEffect(missingModelEnv)
 
-itMissingModel.instance("missing cruise_control model denies without human ask", () =>
+itMissingModel.instance("unset cruise_control model asks with a configuration hint", () =>
   Effect.gen(function* () {
     const modules = yield* PermissionModule.Service
     const config = yield* Config.Service
@@ -769,6 +781,7 @@ itMissingModel.instance("missing cruise_control model denies without human ask",
         // Model capability must never be reached: an unset model short-circuits first.
         decideCruiseControl({
           ...input,
+          paths: TEST_PATHS,
           model: {
             generate: async () => {
               throw new Error("classifier must not call the model when none is configured")
@@ -783,10 +796,12 @@ itMissingModel.instance("missing cruise_control model denies without human ask",
         patterns: ["ls"],
         metadata: {},
       }),
-    ).toEqual({ decision: "deny", reason: MISSING_MODEL_MESSAGE })
+    ).toEqual({ decision: "ask", reason: MISSING_MODEL_MESSAGE })
 
+    // Unset model is configuration, not a safety failure: escalate to the human
+    // with the hint rather than blocking every gated tool.
     const permission = yield* Permission.Service
-    const blocked = yield* permission
+    const fiber = yield* permission
       .ask({
         sessionID: SessionID.make("ses_module_missing_model"),
         permission: "bash",
@@ -795,10 +810,23 @@ itMissingModel.instance("missing cruise_control model denies without human ask",
         always: ["ls"],
         ruleset: Permission.fromConfig({ "*": PermissionModuleSchema.CRUISE_CONTROL }),
       })
-      .pipe(Effect.flip)
-    expect(blocked).toBeInstanceOf(PermissionV1.DeniedError)
-    expect(blocked.message).toBe(MISSING_MODEL_MESSAGE)
-    expect(yield* permission.list()).toEqual([])
+      .pipe(Effect.forkChild)
+
+    const pending = yield* Effect.gen(function* () {
+      while (true) {
+        const list = yield* permission.list()
+        if (list.length === 1) return list
+        yield* Effect.sleep("10 millis")
+      }
+    }).pipe(
+      Effect.timeoutOrElse({
+        duration: "1 second",
+        orElse: () => Effect.fail(new Error("timed out waiting for pending ask")),
+      }),
+    )
+    expect(pending[0]?.metadata).toMatchObject({ reason: MISSING_MODEL_MESSAGE })
+    yield* permission.reply({ requestID: pending[0]!.id, reply: "once" })
+    yield* Fiber.join(fiber)
     unregister()
   }),
 )
@@ -877,10 +905,15 @@ describe("classifier contract", () => {
     ).toBeUndefined()
   })
 
-  test("ensureDefaultInstructions writes defaults when unset", async () => {
+  // Defaults are applied at decision time but never written to config: they would
+  // go stale on every update in a file the user never edited.
+  test("plugin init does not write default instructions into config", async () => {
     const patches: unknown[] = []
-    await Effect.runPromise(
-      ensureDefaultInstructions().pipe(
+    const bridge = await Effect.runPromise(
+      Effect.gen(function* () {
+        return yield* EffectBridge.make()
+      }).pipe(
+        Effect.scoped,
         Effect.provide(
           TestConfig.layer({
             getGlobal: () => Effect.succeed({}),
@@ -892,84 +925,12 @@ describe("classifier contract", () => {
         ),
       ),
     )
-    expect(patches).toEqual([
-      {
-        permission_modules: {
-          cruise_control: { instructions: DEFAULT_INSTRUCTIONS },
-        },
-      },
-    ])
-  })
-
-  test("ensureDefaultInstructions fills only missing sections", async () => {
-    const patches: unknown[] = []
-    await Effect.runPromise(
-      ensureDefaultInstructions().pipe(
-        Effect.provide(
-          TestConfig.layer({
-            getGlobal: () =>
-              Effect.succeed({
-                permission_modules: {
-                  cruise_control: {
-                    model: "opencode/deepseek-v4-flash",
-                    instructions: { allow: ["User allow rule."] },
-                  },
-                },
-              }),
-            updateGlobal: (config) => {
-              patches.push(config)
-              return Effect.succeed({ info: config, changed: true })
-            },
-          }),
-        ),
-      ),
-    )
-    expect(patches).toEqual([
-      {
-        permission_modules: {
-          cruise_control: {
-            instructions: {
-              background: DEFAULT_INSTRUCTIONS.background,
-              allow: ["User allow rule."],
-              conditional: DEFAULT_INSTRUCTIONS.conditional,
-              deny: DEFAULT_INSTRUCTIONS.deny,
-            },
-          },
-        },
-      },
-    ])
-  })
-
-  test("ensureDefaultInstructions does not overwrite complete instructions", async () => {
-    const patches: unknown[] = []
-    const custom = {
-      background: ["Custom background."],
-      allow: [],
-      conditional: ["Custom conditional."],
-      deny: ["Custom deny."],
-    }
-    const result = await Effect.runPromise(
-      ensureDefaultInstructions().pipe(
-        Effect.provide(
-          TestConfig.layer({
-            getGlobal: () =>
-              Effect.succeed({
-                permission_modules: {
-                  cruise_control: {
-                    model: "opencode/deepseek-v4-flash",
-                    instructions: custom,
-                  },
-                },
-              }),
-            updateGlobal: (config) => {
-              patches.push(config)
-              return Effect.succeed({ info: config, changed: true })
-            },
-          }),
-        ),
-      ),
-    )
-    expect(result).toEqual({ changed: false })
+    const registered: string[] = []
+    await createCruiseControlPlugin(bridge)({
+      ...fakePluginInput(),
+      permission: { registerModule: (module) => registered.push(module.id) },
+    })
+    expect(registered).toEqual([PermissionModuleSchema.CRUISE_CONTROL])
     expect(patches).toEqual([])
   })
 
@@ -1165,6 +1126,7 @@ describe("classifier contract", () => {
     ]
     const outcome = await Effect.runPromise(
       runClassifier({
+        paths: TEST_PATHS,
         permission: "bash",
         patterns: ["git reset --soft HEAD~1"],
         metadata: { command: "git reset --soft HEAD~1" },
@@ -1196,6 +1158,7 @@ describe("classifier contract", () => {
     ]
     const outcome = await Effect.runPromise(
       runClassifier({
+        paths: TEST_PATHS,
         permission: "bash",
         patterns: ["rm -rf ./dist"],
         metadata: { command: "rm -rf ./dist" },
@@ -1212,6 +1175,7 @@ describe("classifier contract", () => {
   test("explicit high intent allows even high risk before safety rails", async () => {
     const outcome = await Effect.runPromise(
       runClassifier({
+        paths: TEST_PATHS,
         permission: "bash",
         patterns: ["deploy production"],
         opts: { allowlist: ["bash"], timeout_ms: 1000 },
@@ -1231,6 +1195,7 @@ describe("classifier contract", () => {
   test("missing explicit prompt caps high intent before binary derivation", async () => {
     const outcome = await Effect.runPromise(
       runClassifier({
+        paths: TEST_PATHS,
         permission: "bash",
         patterns: ["deploy production"],
         opts: { allowlist: ["bash"], timeout_ms: 1000 },
@@ -1304,16 +1269,29 @@ describe("classifier contract", () => {
     const configGlob = path.join(Global.Path.config, "*")
     const configChild = path.join(Global.Path.config, "agents")
     const homeConfig = path.join(path.dirname(Global.Path.config), "*")
-    expect(isManagedAppDirectoryPattern(configGlob)).toBe(true)
-    expect(isManagedAppDirectoryPattern(configChild)).toBe(true)
-    expect(isManagedAppDirectoryPattern(path.join(Global.Path.data, "db"))).toBe(true)
-    expect(isManagedAppDirectoryPattern(homeConfig)).toBe(false)
-    expect(isManagedAppDirectoryPattern("/some/other/path/*")).toBe(false)
-    expect(managedAppDirectoryAllow("external_directory", [configGlob])).toBe(
+    expect(isManagedAppDirectoryPattern(configGlob, Global.Path)).toBe(true)
+    expect(isManagedAppDirectoryPattern(configChild, Global.Path)).toBe(true)
+    expect(isManagedAppDirectoryPattern(path.join(Global.Path.data, "db"), Global.Path)).toBe(true)
+    expect(isManagedAppDirectoryPattern(homeConfig, Global.Path)).toBe(false)
+    expect(isManagedAppDirectoryPattern("/some/other/path/*", Global.Path)).toBe(false)
+    expect(managedAppDirectoryAllow("external_directory", [configGlob], Global.Path)).toBe(
       "KanCode managed app directory access is allowed",
     )
-    expect(managedAppDirectoryAllow("external_directory", [homeConfig])).toBeUndefined()
-    expect(managedAppDirectoryAllow("read", [configGlob])).toBeUndefined()
+    expect(managedAppDirectoryAllow("external_directory", [homeConfig], Global.Path)).toBeUndefined()
+    expect(managedAppDirectoryAllow("read", [configGlob], Global.Path)).toBeUndefined()
+  })
+
+  test("managed app directories follow the supplied paths, not the host globals", () => {
+    const paths = { config: "/custom/cfg", data: "/custom/data", cache: "/c", state: "/s", tmp: "/t" }
+    expect(isManagedAppDirectoryPattern("/custom/cfg/agents", paths)).toBe(true)
+    expect(isManagedAppDirectoryPattern(path.join(Global.Path.config, "agents"), paths)).toBe(false)
+    expect(managedAppDirectoryGlobs(paths)).toEqual([
+      path.join("/custom/cfg", "*"),
+      path.join("/custom/data", "*"),
+      path.join("/c", "*"),
+      path.join("/s", "*"),
+      path.join("/t", "*"),
+    ])
   })
 
   test("sessionTodoAllow requires session pattern or scope metadata", () => {
@@ -1350,6 +1328,7 @@ describe("classifier contract", () => {
   test("valid allow from classifier", async () => {
     const outcome = await Effect.runPromise(
       runClassifier({
+        paths: TEST_PATHS,
         permission: "bash",
         patterns: ["ls"],
         opts: { fallback: "deny", allowlist: ["bash"], timeout_ms: 1000 },
@@ -1363,6 +1342,7 @@ describe("classifier contract", () => {
   test("host keeps model intent for instruction fit; deny is LLM-scored", async () => {
     const outcome = await Effect.runPromise(
       runClassifier({
+        paths: TEST_PATHS,
         permission: "bash",
         patterns: ["git reset --soft HEAD~1"],
         metadata: { command: "git reset --soft HEAD~1" },
@@ -1388,6 +1368,7 @@ describe("classifier contract", () => {
   test("read permission allows on classifier medium/medium without host instruction regex", async () => {
     const outcome = await Effect.runPromise(
       runClassifier({
+        paths: TEST_PATHS,
         permission: "read",
         patterns: ["src/index.ts"],
         opts: { allowlist: ["read"], timeout_ms: 1000 },
@@ -1431,6 +1412,7 @@ describe("classifier contract", () => {
   test("valid allow from classifier legacy", async () => {
     const outcome = await Effect.runPromise(
       runClassifier({
+        paths: TEST_PATHS,
         permission: "bash",
         patterns: ["deploy --dry-run"],
         opts: { fallback: "deny", allowlist: ["bash"], timeout_ms: 1000 },
@@ -1445,6 +1427,7 @@ describe("classifier contract", () => {
     let called = false
     const outcome = await Effect.runPromise(
       runClassifier({
+        paths: TEST_PATHS,
         permission: "bash",
         patterns: ["rm -rf /"],
         opts: { fallback: "ask", allowlist: ["bash"], timeout_ms: 1000 },
@@ -1467,6 +1450,7 @@ describe("classifier contract", () => {
     const configGlob = path.join(Global.Path.config, "*")
     const outcome = await Effect.runPromise(
       runClassifier({
+        paths: TEST_PATHS,
         permission: "external_directory",
         patterns: [configGlob],
         opts: { fallback: "ask", allowlist: ["external_directory"], timeout_ms: 1000 },
@@ -1487,6 +1471,7 @@ describe("classifier contract", () => {
   test("managed app directory candidate allow is denied by never_auto", async () => {
     const outcome = await Effect.runPromise(
       runClassifier({
+        paths: TEST_PATHS,
         permission: "external_directory",
         patterns: [path.join(Global.Path.config, "*")],
         opts: {
@@ -1507,6 +1492,7 @@ describe("classifier contract", () => {
     let called = false
     const outcome = await Effect.runPromise(
       runClassifier({
+        paths: TEST_PATHS,
         permission: "todowrite",
         patterns: ["session"],
         metadata: { sessionID: "ses_test", scope: "session", kind: "todo_list", count: 2 },
@@ -1529,6 +1515,7 @@ describe("classifier contract", () => {
     let called = false
     const outcome = await Effect.runPromise(
       runClassifier({
+        paths: TEST_PATHS,
         permission: "session_rename",
         patterns: ["session"],
         metadata: { sessionID: "ses_test", scope: "session", kind: "session_title", title: "Renamed" },
@@ -1550,6 +1537,7 @@ describe("classifier contract", () => {
   test("session-scoped todowrite candidate allow is denied by an empty allowlist", async () => {
     const outcome = await Effect.runPromise(
       runClassifier({
+        paths: TEST_PATHS,
         permission: "todowrite",
         patterns: ["session"],
         metadata: { scope: "session" },
@@ -1567,6 +1555,7 @@ describe("classifier contract", () => {
     let called = false
     const outcome = await Effect.runPromise(
       runClassifier({
+        paths: TEST_PATHS,
         permission: "todowrite",
         patterns: ["*"],
         metadata: {},
@@ -1587,6 +1576,7 @@ describe("classifier contract", () => {
   test("safety rails replace allow-sounding reason and deny", async () => {
     const outcome = await Effect.runPromise(
       runClassifier({
+        paths: TEST_PATHS,
         permission: "external_directory",
         patterns: ["/some/other/path/*"],
         opts: {
@@ -1615,6 +1605,7 @@ describe("classifier contract", () => {
   test("classifier allow for external_directory sticks without never_auto", async () => {
     const outcome = await Effect.runPromise(
       runClassifier({
+        paths: TEST_PATHS,
         permission: "external_directory",
         patterns: ["/tmp/build/*"],
         opts: { fallback: "ask", allowlist: ["external_directory"], timeout_ms: 1000 },
@@ -1628,6 +1619,7 @@ describe("classifier contract", () => {
   test("classifier allow for external_directory sticks with default allowlist", async () => {
     const outcome = await Effect.runPromise(
       runClassifier({
+        paths: TEST_PATHS,
         permission: "external_directory",
         patterns: ["/tmp/build/*"],
         opts: { fallback: "ask", timeout_ms: 1000 },
@@ -1641,6 +1633,7 @@ describe("classifier contract", () => {
   test("invalid classifier output denies even with fallback ask", async () => {
     const outcome = await Effect.runPromise(
       runClassifier({
+        paths: TEST_PATHS,
         permission: "bash",
         patterns: ["ls"],
         opts: { fallback: "ask", allowlist: ["bash"], timeout_ms: 1000, retries: 1 },
@@ -1655,6 +1648,7 @@ describe("classifier contract", () => {
   test("timeout uses fallback and never allows", async () => {
     const outcome = await Effect.runPromise(
       runClassifier({
+        paths: TEST_PATHS,
         permission: "bash",
         patterns: ["ls"],
         opts: { fallback: "deny", allowlist: ["bash"], timeout_ms: 20, retries: 1 },
@@ -1669,6 +1663,7 @@ describe("classifier contract", () => {
   test("timeout defaults to deny when fallback unset", async () => {
     const outcome = await Effect.runPromise(
       runClassifier({
+        paths: TEST_PATHS,
         permission: "bash",
         patterns: ["ls"],
         opts: { allowlist: ["bash"], timeout_ms: 20, retries: 1 },
@@ -1684,6 +1679,7 @@ describe("classifier contract", () => {
     let calls = 0
     const outcome = await Effect.runPromise(
       runClassifier({
+        paths: TEST_PATHS,
         permission: "bash",
         patterns: ["ls"],
         opts: { fallback: "ask", allowlist: ["bash"], timeout_ms: 1000, retry_interval_ms: 0 },
@@ -1705,6 +1701,7 @@ describe("classifier contract", () => {
     let calls = 0
     const outcome = await Effect.runPromise(
       runClassifier({
+        paths: TEST_PATHS,
         permission: "bash",
         patterns: ["deploy --dry-run"],
         opts: { fallback: "ask", allowlist: ["bash"], timeout_ms: 1000, retries: 3, retry_interval_ms: 0 },
@@ -1725,6 +1722,7 @@ describe("classifier contract", () => {
     const started = Date.now()
     const outcome = await Effect.runPromise(
       runClassifier({
+        paths: TEST_PATHS,
         permission: "bash",
         patterns: ["ls"],
         opts: {
@@ -1750,6 +1748,7 @@ describe("classifier contract", () => {
     let calls = 0
     const outcome = await Effect.runPromise(
       runClassifier({
+        paths: TEST_PATHS,
         permission: "bash",
         patterns: ["ls"],
         opts: { fallback: "deny", allowlist: ["bash"], retries: 0 },
@@ -1771,6 +1770,7 @@ describe("classifier contract", () => {
     let calls = 0
     const outcome = await Effect.runPromise(
       runClassifier({
+        paths: TEST_PATHS,
         permission: "bash",
         patterns: ["ls"],
         opts: { fallback: "ask", allowlist: ["bash"], timeout_ms: 40, retries: 2, retry_interval_ms: 0 },
@@ -1810,6 +1810,7 @@ describe("classifier contract", () => {
       Effect.all(
         [
           runClassifier({
+            paths: TEST_PATHS,
             permission: "bash",
             patterns: ["ls"],
             opts,
@@ -1817,6 +1818,7 @@ describe("classifier contract", () => {
             modelRef: "opencode/deepseek-v4-flash",
           }),
           runClassifier({
+            paths: TEST_PATHS,
             permission: "bash",
             patterns: ["pwd"],
             opts,
@@ -1852,6 +1854,7 @@ describe("classifier contract", () => {
       Effect.all(
         [
           runClassifier({
+            paths: TEST_PATHS,
             permission: "bash",
             patterns: ["ls"],
             opts,
@@ -1859,6 +1862,7 @@ describe("classifier contract", () => {
             modelRef: "opencode/deepseek-v4-flash",
           }),
           runClassifier({
+            paths: TEST_PATHS,
             permission: "bash",
             patterns: ["pwd"],
             opts,
@@ -1892,6 +1896,7 @@ describe("classifier contract", () => {
       Effect.all(
         [
           runClassifier({
+            paths: TEST_PATHS,
             permission: "bash",
             patterns: ["ls"],
             opts,
@@ -1899,6 +1904,7 @@ describe("classifier contract", () => {
             modelRef: "opencode/deepseek-v4-flash",
           }),
           runClassifier({
+            paths: TEST_PATHS,
             permission: "bash",
             patterns: ["pwd"],
             opts,
@@ -1935,6 +1941,7 @@ describe("classifier contract", () => {
       Effect.all(
         [
           runClassifier({
+            paths: TEST_PATHS,
             permission: "bash",
             patterns: ["echo a"],
             opts,
@@ -1942,6 +1949,7 @@ describe("classifier contract", () => {
             modelRef: "opencode/deepseek-v4-flash",
           }),
           runClassifier({
+            paths: TEST_PATHS,
             permission: "bash",
             patterns: ["echo b"],
             opts,
@@ -1980,6 +1988,7 @@ describe("classifier contract", () => {
       Effect.all(
         [
           runClassifier({
+            paths: TEST_PATHS,
             permission: "bash",
             patterns: ["ls"],
             opts,
@@ -1987,6 +1996,7 @@ describe("classifier contract", () => {
             modelRef: "opencode/deepseek-v4-flash",
           }),
           runClassifier({
+            paths: TEST_PATHS,
             permission: "bash",
             patterns: ["pwd"],
             opts,
@@ -2018,6 +2028,7 @@ describe("classifier contract", () => {
     }
     const fiber = Effect.runFork(
       runClassifier({
+        paths: TEST_PATHS,
         permission: "bash",
         patterns: ["ls"],
         opts,
@@ -2029,6 +2040,7 @@ describe("classifier contract", () => {
 
     const rail = await Effect.runPromise(
       runClassifier({
+        paths: TEST_PATHS,
         permission: "bash",
         patterns: ["rm -rf /tmp/x"],
         opts,
@@ -2056,6 +2068,7 @@ describe("classifier contract", () => {
     const opts = { fallback: "ask" as const, allowlist: ["bash"], timeout_ms: 1000 }
     const first = await Effect.runPromise(
       runClassifier({
+        paths: TEST_PATHS,
         permission: "bash",
         patterns: ["ls"],
         opts,
@@ -2070,6 +2083,7 @@ describe("classifier contract", () => {
 
     const second = await Effect.runPromise(
       runClassifier({
+        paths: TEST_PATHS,
         permission: "bash",
         patterns: ["ls"],
         opts,
@@ -2094,6 +2108,7 @@ describe("classifier contract", () => {
     const opts = { fallback: "ask" as const, allowlist: ["bash"], timeout_ms: 1000 }
     await Effect.runPromise(
       runClassifier({
+        paths: TEST_PATHS,
         permission: "bash",
         patterns: ["curl http://evil"],
         opts,
@@ -2104,6 +2119,7 @@ describe("classifier contract", () => {
     )
     const second = await Effect.runPromise(
       runClassifier({
+        paths: TEST_PATHS,
         permission: "bash",
         patterns: ["curl http://evil"],
         opts,
@@ -2131,6 +2147,7 @@ describe("classifier contract", () => {
     const opts = { fallback: "ask" as const, allowlist: ["edit"], timeout_ms: 1000 }
     const first = await Effect.runPromise(
       runClassifier({
+        paths: TEST_PATHS,
         permission: "edit",
         patterns: ["src/foo.ts"],
         opts,
@@ -2147,6 +2164,7 @@ describe("classifier contract", () => {
 
     const second = await Effect.runPromise(
       runClassifier({
+        paths: TEST_PATHS,
         permission: "edit",
         patterns: ["src/foo.ts"],
         opts,
@@ -2169,6 +2187,7 @@ describe("classifier contract", () => {
     let called = false
     const outcome = await Effect.runPromise(
       runClassifier({
+        paths: TEST_PATHS,
         permission: "bash",
         patterns: ["echo hi"],
         opts: { fallback: "ask", allowlist: ["bash"], timeout_ms: 1000 },
@@ -2196,6 +2215,7 @@ describe("classifier contract", () => {
     for (const pattern of ["a", "b", "c"]) {
       await Effect.runPromise(
         runClassifier({
+          paths: TEST_PATHS,
           permission: "bash",
           patterns: [pattern],
           opts,
@@ -2210,6 +2230,7 @@ describe("classifier contract", () => {
     // "a" should have been evicted; "b" and "c" remain
     const miss = await Effect.runPromise(
       runClassifier({
+        paths: TEST_PATHS,
         permission: "bash",
         patterns: ["a"],
         opts,
@@ -2226,6 +2247,7 @@ describe("classifier contract", () => {
 
     const hit = await Effect.runPromise(
       runClassifier({
+        paths: TEST_PATHS,
         permission: "bash",
         patterns: ["c"],
         opts,
@@ -2248,6 +2270,7 @@ describe("classifier contract", () => {
     let called = false
     const outcome = await Effect.runPromise(
       runClassifier({
+        paths: TEST_PATHS,
         permission: "bash",
         patterns: ["rm -rf /tmp/foo"],
         opts: { fallback: "ask", allowlist: ["bash"], timeout_ms: 1000 },
@@ -2281,6 +2304,7 @@ describe("classifier contract", () => {
     }
     const first = await Effect.runPromise(
       runClassifier({
+        paths: TEST_PATHS,
         permission: "bash",
         patterns: ["ls"],
         opts,
@@ -2292,6 +2316,7 @@ describe("classifier contract", () => {
     expect(first.decision).toBe("deny")
     const second = await Effect.runPromise(
       runClassifier({
+        paths: TEST_PATHS,
         permission: "bash",
         patterns: ["ls"],
         opts,
@@ -2319,6 +2344,7 @@ describe("classifier contract", () => {
     }
     const first = await Effect.runPromise(
       runClassifier({
+        paths: TEST_PATHS,
         permission: "bash",
         patterns: ["deploy production"],
         opts,
@@ -2328,6 +2354,7 @@ describe("classifier contract", () => {
     )
     const second = await Effect.runPromise(
       runClassifier({
+        paths: TEST_PATHS,
         permission: "bash",
         patterns: ["deploy production"],
         opts,
@@ -2351,6 +2378,7 @@ describe("classifier contract", () => {
     const run = (cacheScope: string) =>
       Effect.runPromise(
         runClassifier({
+          paths: TEST_PATHS,
           permission: "bash",
           patterns: ["ls"],
           opts,
@@ -2381,6 +2409,7 @@ describe("classifier contract", () => {
     const cacheScope = "workspace\0session\0prompt"
     await Effect.runPromise(
       runClassifier({
+        paths: TEST_PATHS,
         permission: "bash",
         patterns: ["deploy --dry-run"],
         opts: { fallback: "ask", allowlist: ["bash"], timeout_ms: 1000 },
@@ -2393,6 +2422,7 @@ describe("classifier contract", () => {
     let calls = 0
     const outcome = await Effect.runPromise(
       runClassifier({
+        paths: TEST_PATHS,
         permission: "bash",
         patterns: ["deploy --dry-run"],
         opts: { fallback: "ask", allowlist: ["bash"], timeout_ms: 1000 },
@@ -2424,6 +2454,7 @@ describe("classifier contract", () => {
     }
     await Effect.runPromise(
       runClassifier({
+        paths: TEST_PATHS,
         permission: "bash",
         patterns: ["ls"],
         opts,
@@ -2434,6 +2465,7 @@ describe("classifier contract", () => {
     )
     await Effect.runPromise(
       runClassifier({
+        paths: TEST_PATHS,
         permission: "bash",
         patterns: ["ls"],
         opts,
@@ -2453,6 +2485,7 @@ describe("classifier contract", () => {
       return lowRisk("ok")
     })
     const input = {
+      paths: TEST_PATHS,
       permission: "bash",
       patterns: ["ls"],
       opts: { allowlist: ["bash"], timeout_ms: 1000 },

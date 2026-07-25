@@ -1,24 +1,55 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
   "name": "@kancode/plugin",
-  "version": "1.17.20",
+  "version": "0.1.0",
   "type": "module",
   "license": "MIT",
   "scripts": {
     "typecheck": "tsgo --noEmit",
-    "build": "tsc"
+    "build": "tsc",
+    "prepublishOnly": "bun run build"
   },
   "exports": {
-    ".": "./src/index.ts",
-    "./tool": "./src/tool.ts",
-    "./tui": "./src/tui.ts",
-    "./v2/effect": "./src/v2/effect/index.ts",
-    "./v2/effect/integration": "./src/v2/effect/integration.ts",
-    "./v2/effect/plugin": "./src/v2/effect/plugin.ts",
-    "./v2/promise": "./src/v2/promise/index.ts"
+    ".": {
+      "bun": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./tool": {
+      "bun": "./src/tool.ts",
+      "types": "./dist/tool.d.ts",
+      "import": "./dist/tool.js"
+    },
+    "./tui": {
+      "bun": "./src/tui.ts",
+      "types": "./dist/tui.d.ts",
+      "import": "./dist/tui.js"
+    },
+    "./v2/effect": {
+      "bun": "./src/v2/effect/index.ts",
+      "types": "./dist/v2/effect/index.d.ts",
+      "import": "./dist/v2/effect/index.js"
+    },
+    "./v2/effect/integration": {
+      "bun": "./src/v2/effect/integration.ts",
+      "types": "./dist/v2/effect/integration.d.ts",
+      "import": "./dist/v2/effect/integration.js"
+    },
+    "./v2/effect/plugin": {
+      "bun": "./src/v2/effect/plugin.ts",
+      "types": "./dist/v2/effect/plugin.d.ts",
+      "import": "./dist/v2/effect/plugin.js"
+    },
+    "./v2/promise": {
+      "bun": "./src/v2/promise/index.ts",
+      "types": "./dist/v2/promise/index.d.ts",
+      "import": "./dist/v2/promise/index.js"
+    },
+    "./package.json": "./package.json"
   },
   "files": [
-    "dist"
+    "dist",
+    "src"
   ],
   "dependencies": {
     "@ai-sdk/provider": "3.0.8",
@@ -50,5 +81,14 @@
     "@types/node": "catalog:",
     "typescript": "catalog:",
     "@typescript/native-preview": "catalog:"
+  },
+  "description": "Plugin SDK for KanCode: types and contracts for server, TUI, and permission-module plugins.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/puetsua/kancode.git",
+    "directory": "packages/plugin"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

@@ -9,7 +9,7 @@ import { patchPluginConfig } from "./install"
  * Written unpinned: the whole point of extracting these is that they ship fixes
  * without a KanCode release, and a pinned spec is never rechecked for updates.
  */
-export const DEFAULT_PLUGINS = ["@puetsua/kancode-cruise-control"] as const
+export const DEFAULT_PLUGINS = ["@kancode/cruise-control"] as const
 
 /** Records which plugins have already been offered, so removal is permanent. */
 const MARKER = path.join(Global.Path.state, "default-plugins.json")

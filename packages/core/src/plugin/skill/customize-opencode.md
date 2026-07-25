@@ -307,7 +307,7 @@ Its default tool permissions use the `cruise_control` classifier module
 not conflate the agent id with the permission-module id.
 
 The `cruise_control` classifier itself ships separately as
-`@puetsua/kancode-cruise-control`, seeded into global config on first run and
+`@kancode/cruise-control`, seeded into global config on first run and
 removable like any plugin. If it is not installed, rules naming `cruise_control`
 degrade to asking rather than denying, and the agent still works — it just asks
 more. Full option reference lives in that package's README.

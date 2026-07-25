@@ -347,7 +347,7 @@
     },
     "packages/plugin": {
       "name": "@kancode/plugin",
-      "version": "1.17.20",
+      "version": "0.1.0",
       "dependencies": {
         "@ai-sdk/provider": "3.0.8",
         "@kancode/sdk": "workspace:*",
@@ -423,7 +423,7 @@
     },
     "packages/sdk/js": {
       "name": "@kancode/sdk",
-      "version": "1.17.20",
+      "version": "0.1.0",
       "dependencies": {
         "cross-spawn": "catalog:",
       },

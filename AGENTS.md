@@ -32,7 +32,7 @@ Repo-wide principles only. Package-level `AGENTS.md` owns package detail; `opens
 ## Release
 
 - npm names: app is unscoped **`kancode`**; libraries are **`@kancode/*`** and publish under the name they are imported by — never remap a library at publish time, emitted `.d.ts` cross-references cannot follow. Platform binaries stay unscoped `kancode-<platform>`.
-- `@kancode/sdk` and `@kancode/plugin` release together: `workspace:*` pins plugin -> sdk at pack time, so publishing one without the other yields an uninstallable package.
+- `@kancode/sdk` and `@kancode/plugin` release together via `bun script/publish-libs.ts` (sdk first). Never `npm publish` from a library directory: it uploads bun's `workspace:`/`catalog:` protocols verbatim and npm rejects the install with EUNSUPPORTEDPROTOCOL. `bun script/check-publishable.ts` verifies the tarballs.
 - Legacy `@puetsua/kancode` stays published as a deprecated bridge; do not unpublish it or old lockfiles break.
 
 - Tags are semver **`MAJOR.MINOR.PATCH`** with **no `v` prefix** (`0.2.5`, not `v0.2.5`). The Release workflow only triggers on `[0-9]+.[0-9]+.[0-9]+`.

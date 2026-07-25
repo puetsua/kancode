@@ -5,7 +5,7 @@ import { httpClient } from "@kancode/core/effect/app-node-platform"
 import { Effect, Layer, Stream } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
-import { Installation } from "../../src/installation"
+import { Installation, NPM_PACKAGE } from "../../src/installation"
 import { InstallationChannel } from "@kancode/core/installation/version"
 import { CrossSpawnSpawner } from "@kancode/core/cross-spawn-spawner"
 import { testEffect } from "../lib/effect"
@@ -96,7 +96,7 @@ describe("installation", () => {
       Effect.gen(function* () {
         const result = yield* Installation.use.latest("npm")
         expect(result).toBe("1.5.0")
-        expect(npmCalls).toContain(`https://registry.npmjs.org/@puetsua/kancode/${InstallationChannel}`)
+        expect(npmCalls).toContain(`https://registry.npmjs.org/${NPM_PACKAGE}/${InstallationChannel}`)
       }),
     )
 
@@ -110,7 +110,7 @@ describe("installation", () => {
       Effect.gen(function* () {
         const result = yield* Installation.use.latest("bun")
         expect(result).toBe("1.6.0")
-        expect(bunCalls).toContain(`https://registry.npmjs.org/@puetsua/kancode/${InstallationChannel}`)
+        expect(bunCalls).toContain(`https://registry.npmjs.org/${NPM_PACKAGE}/${InstallationChannel}`)
       }),
     )
 
@@ -124,7 +124,7 @@ describe("installation", () => {
       Effect.gen(function* () {
         const result = yield* Installation.use.latest("pnpm")
         expect(result).toBe("1.7.0")
-        expect(pnpmCalls).toContain(`https://registry.npmjs.org/@puetsua/kancode/${InstallationChannel}`)
+        expect(pnpmCalls).toContain(`https://registry.npmjs.org/${NPM_PACKAGE}/${InstallationChannel}`)
       }),
     )
 
@@ -236,7 +236,7 @@ describe("installation", () => {
         expect(error).toBeInstanceOf(Installation.UpgradeFailedError)
         // The upgrade path must mention the KanCode npm package, not opencode-ai,
         // and must not run any upstream install script.
-        expect(error.message).toContain("@puetsua/kancode")
+        expect(error.message).toContain(NPM_PACKAGE)
         expect(error.message).not.toContain("opencode-ai")
         expect(error.message).not.toContain("opencode.ai")
       }),

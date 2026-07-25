@@ -14,7 +14,7 @@ on:
         type: boolean
         default: false
       allow_missing_binaries:
-        description: "Allow publishing @puetsua/kancode even if some platform binary packages failed"
+        description: "Allow publishing kancode even if some platform binary packages failed"
         type: boolean
         default: false
       skip_binaries:

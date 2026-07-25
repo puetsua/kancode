@@ -27,17 +27,22 @@ import { EffectBridge } from "@/effect/bridge"
 import { InstanceState } from "@/effect/instance-state"
 import { errorMessage } from "@/util/error"
 import { PluginLoader } from "./loader"
+import { DEFAULT_PLUGINS, seedDefaultPlugins } from "./default-plugins"
+import { makeModelCapability } from "./model"
 import { parsePluginSpecifier, readPluginId, readV1Plugin, resolvePluginId } from "./shared"
 import { registerAdapter } from "@/control-plane/adapters"
 import type { WorkspaceAdapter } from "@/control-plane/types"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { InstallationChannel } from "@kancode/core/installation/version"
+import { Global } from "@kancode/core/global"
 import { PermissionModule } from "@kancode/core/permission/module"
 import * as Option from "effect/Option"
 
 type State = {
   hooks: Hooks[]
+  /** Clears every plugin's per-turn model call budget. Called on each new user message. */
+  resetModelBudgets: () => void
 }
 
 function validPermissionModuleDecision(value: unknown) {
@@ -150,16 +155,35 @@ function getLegacyPlugins(mod: Record<string, unknown>) {
   return result
 }
 
-async function applyPlugin(load: PluginLoader.Loaded, input: PluginInput, hooks: Hooks[]) {
+/**
+ * Explicit `plugin_enabled` overrides keyed by plugin id. Plugins are enabled by
+ * default; only `false` suppresses one. Mirrors the TUI's `plugin_enabled` so a
+ * user opt-out survives independently of whether the plugin is still listed.
+ */
+function pluginDisabled(enabled: Record<string, boolean> | undefined, id: string) {
+  return enabled?.[id] === false
+}
+
+async function applyPlugin(
+  load: PluginLoader.Loaded,
+  input: PluginInput,
+  hooks: Hooks[],
+  enabled: Record<string, boolean> | undefined,
+  modelFor: (pluginID: string) => PluginInput["model"],
+) {
   const plugin = readV1Plugin(load.mod, load.spec, "server", "detect")
   if (plugin) {
-    await resolvePluginId(load.source, load.spec, load.target, readPluginId(plugin.id, load.spec), load.pkg)
-    hooks.push(await (plugin as PluginModule).server(input, load.options))
+    const id = await resolvePluginId(load.source, load.spec, load.target, readPluginId(plugin.id, load.spec), load.pkg)
+    if (pluginDisabled(enabled, id)) return
+    hooks.push(await (plugin as PluginModule).server({ ...input, model: modelFor(id) }, load.options))
     return
   }
 
+  // Legacy plugins export bare functions with no id, so they cannot be addressed
+  // by `plugin_enabled`; fall back to the package/path spec.
+  if (pluginDisabled(enabled, load.spec)) return
   for (const server of getLegacyPlugins(load.mod)) {
-    hooks.push(await server(input, load.options))
+    hooks.push(await server({ ...input, model: modelFor(load.spec) }, load.options))
   }
 }
 
@@ -169,6 +193,8 @@ const layer = Layer.effect(
     const events = yield* EventV2Bridge.Service
     const config = yield* Config.Service
     const flags = yield* RuntimeFlags.Service
+    // Resolved here, not inside the per-instance effect, which may only require Scope.
+    const global = yield* Global.Service
 
     const state = yield* InstanceState.make<State>(
       Effect.fn("Plugin.state")(function* (ctx) {
@@ -191,11 +217,28 @@ const layer = Layer.effect(
         })
         const cfg = yield* config.get()
         const modules = yield* Effect.serviceOption(PermissionModule.Service)
+        // One capability per plugin id so usage is attributable and the concurrency
+        // cap and per-turn budget bound each plugin independently.
+        const capabilities = new Map<string, ReturnType<typeof makeModelCapability>>()
+        function modelFor(pluginID: string) {
+          const existing = capabilities.get(pluginID)
+          if (existing) return existing
+          const created = makeModelCapability({ bridge, pluginID })
+          capabilities.set(pluginID, created)
+          return created
+        }
         const input: PluginInput = {
           client,
           project: ctx.project,
           worktree: ctx.worktree,
           directory: ctx.directory,
+          paths: {
+            config: global.config,
+            data: global.data,
+            cache: global.cache,
+            state: global.state,
+            tmp: global.tmp,
+          },
           experimental_workspace: {
             register(type: string, adapter: PluginWorkspaceAdapter) {
               registerAdapter(ctx.project.id, type, adapter as WorkspaceAdapter)
@@ -227,13 +270,20 @@ const layer = Layer.effect(
           get serverUrl(): URL {
             return Server.url ?? new URL("http://localhost:4096")
           },
+          // Replaced per plugin below so model usage is attributable.
+          model: modelFor("unattributed"),
           // @ts-expect-error
           $: typeof Bun === "undefined" ? undefined : Bun.$,
         }
 
         for (const plugin of flags.disableDefaultPlugins ? [] : internalPlugins(flags)) {
+          // Addressable as `internal:<name>` in `plugin_enabled`, matching the ids
+          // the TUI already uses in its own map. Without this a user writing
+          // `internal:copilot-auth: false` gets silence rather than an opt-out.
+          const internalID = `internal:${plugin.name || "anonymous"}`
+          if (pluginDisabled(cfg.plugin_enabled, internalID)) continue
           const init = yield* Effect.tryPromise({
-            try: () => plugin(input),
+            try: () => plugin({ ...input, model: modelFor(internalID) }),
             catch: errorMessage,
           }).pipe(
             Effect.tapError((error) => Effect.logError("failed to load internal plugin", { name: plugin.name, error })),
@@ -242,25 +292,29 @@ const layer = Layer.effect(
           if (init._tag === "Some") hooks.push(init.value)
         }
 
-        if (!flags.disableDefaultPlugins) {
-          // Lazy import: classifier depends on Provider, which depends on Plugin.
-          const { createCruiseControlPlugin } = yield* Effect.promise(() => import("./cruise-control"))
-          const cruise = createCruiseControlPlugin(bridge)
-          const init = yield* Effect.tryPromise({
-            try: () => cruise(input),
-            catch: errorMessage,
-          }).pipe(
-            Effect.tapError((error) =>
-              Effect.logError("failed to load internal plugin", { name: "cruise-control", error }),
-            ),
-            Effect.option,
-          )
-          if (init._tag === "Some") hooks.push(init.value)
-        }
 
-        const plugins = flags.pure ? [] : (cfg.plugin_origins ?? [])
-        if (flags.pure && cfg.plugin_origins?.length) {
-        }
+        // Seed first-party plugins into global config once ever. The freshly
+        // written specs are appended to this boot's load list too, so the plugin
+        // activates immediately instead of on the next start.
+        const seeded =
+          flags.pure || flags.disableDefaultPlugins
+            ? []
+            : (yield* seedDefaultPlugins({ directory: ctx.directory, worktree: ctx.worktree }).pipe(
+                Effect.catchCause((cause) =>
+                  Effect.logWarning("default plugin seeding failed", { error: String(cause) }).pipe(
+                    Effect.as({ seeded: [] as string[] }),
+                  ),
+                ),
+              )).seeded
+
+        const configured = flags.pure ? [] : (cfg.plugin_origins ?? [])
+        const known = new Set(configured.map((origin) => origin.spec))
+        const plugins = [
+          ...configured,
+          ...seeded
+            .filter((spec) => !known.has(spec))
+            .map((spec) => ({ spec, source: "default", scope: "global" }) as (typeof configured)[number]),
+        ]
         if (plugins.length) yield* config.waitForDependencies()
 
         const loaded = yield* Effect.promise(() =>
@@ -277,6 +331,18 @@ const layer = Layer.effect(
 
                 if (stage === "install") {
                   const parsed = parsePluginSpecifier(spec)
+                  // Seeded plugins are opt-out, not user-requested: an offline start
+                  // must not open a red session error every launch. Permission rules
+                  // naming the missing module degrade to asking.
+                  if ((DEFAULT_PLUGINS as readonly string[]).includes(parsed.pkg)) {
+                    bridge.fork(
+                      Effect.logWarning("default plugin not installed; rules naming it will ask", {
+                        plugin: parsed.pkg,
+                        error: message,
+                      }),
+                    )
+                    return
+                  }
                   publishPluginError(`Failed to install plugin ${parsed.pkg}@${parsed.version}: ${message}`)
                   return
                 }
@@ -302,7 +368,7 @@ const layer = Layer.effect(
           // Keep plugin execution sequential so hook registration and execution
           // order remains deterministic across plugin runs.
           yield* Effect.tryPromise({
-            try: () => applyPlugin(load, input, hooks),
+            try: () => applyPlugin(load, input, hooks, cfg.plugin_enabled, modelFor),
             catch: (err) => {
               const message = errorMessage(err)
               return message
@@ -362,7 +428,12 @@ const layer = Layer.effect(
           ),
         )
 
-        return { hooks }
+        return {
+          hooks,
+          resetModelBudgets: () => {
+            for (const capability of capabilities.values()) capability.resetTurn()
+          },
+        }
       }),
     )
 
@@ -373,6 +444,10 @@ const layer = Layer.effect(
     >(name: Name, input: Input, output: Output) {
       if (!name) return output
       const s = yield* InstanceState.get(state)
+      // A new user message starts a new turn. Without this the per-turn budget is a
+      // process-lifetime budget: once spent, every model call fails and any plugin
+      // that fails closed (like cruise_control) denies every gated tool forever.
+      if (name === "chat.message") s.resetModelBudgets()
       for (const hook of s.hooks) {
         const fn = hook[name] as any
         if (!fn) continue
@@ -397,7 +472,7 @@ const layer = Layer.effect(
 export const node = LayerNode.make({
   service: Service,
   layer: layer,
-  deps: [EventV2Bridge.node, Config.node, RuntimeFlags.node],
+  deps: [EventV2Bridge.node, Config.node, RuntimeFlags.node, Global.node],
 })
 
 export * as Plugin from "."

@@ -10,6 +10,7 @@ import type { useOpencodeKeymap } from "../keymap"
 import type { useKV } from "../context/kv"
 import { DialogAlert } from "../ui/dialog-alert"
 import { DialogConfirm } from "../ui/dialog-confirm"
+import { DialogModel } from "../component/dialog-model"
 import { DialogPrompt } from "../ui/dialog-prompt"
 import { DialogSelect, type DialogSelectOption as SelectOption } from "../ui/dialog-select"
 import { Prompt } from "../component/prompt"
@@ -220,6 +221,9 @@ export function createTuiApiAdapters(input: Input): Omit<TuiPluginApi, "lifecycl
       },
       DialogPrompt(props) {
         return <DialogPrompt {...props} description={props.description} />
+      },
+      DialogModel(props) {
+        return <DialogModel {...props} />
       },
       DialogSelect(props) {
         return (

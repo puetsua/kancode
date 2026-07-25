@@ -1,5 +1,6 @@
 {
   "name": "@kancode/ui",
+  "private": true,
   "version": "1.17.20",
   "type": "module",
   "license": "MIT",

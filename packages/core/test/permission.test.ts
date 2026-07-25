@@ -410,4 +410,33 @@ describe("PermissionV2 modules", () => {
       yield* service.assert(assertion({ action: "bash", resources: ["ls"] }))
     }),
   )
+
+  // Uses the REAL registry rather than a stubbed service, so the unregistered
+  // branch is genuinely exercised. A stub cannot reach it.
+  const itEmptyRegistry = testEffect(Layer.mergeAll(base, PermissionModule.emptyLayer))
+
+  itEmptyRegistry.effect("unregistered module asks a human instead of denying", () =>
+    Effect.gen(function* () {
+      yield* setup([{ action: "bash", resource: "*", effect: "ask", module: "cruise_control" }])
+      const service = yield* PermissionV2.Service
+      const asked = yield* Deferred.make<PermissionV2.Request>()
+      const events = yield* EventV2.Service
+      const unsubscribe = yield* events.listen((event) =>
+        event.type === PermissionV2.Event.Asked.type
+          ? Deferred.succeed(asked, event.data as PermissionV2.Request).pipe(Effect.asVoid)
+          : Effect.void,
+      )
+      yield* Effect.addFinalizer(() => unsubscribe)
+      const fiber = yield* service
+        .assert(assertion({ action: "bash", resources: ["ls"] }))
+        .pipe(Effect.forkScoped)
+      const request = yield* Deferred.await(asked)
+      // The rationale must reach the human, or the ask is unexplainable.
+      expect(request.metadata).toMatchObject({
+        reason: 'Permission module "cruise_control" is not available; approve manually.',
+      })
+      yield* service.reply({ requestID: request.id, reply: "once" })
+      yield* Fiber.join(fiber)
+    }),
+  )
 })

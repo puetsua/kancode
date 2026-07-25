@@ -19,11 +19,17 @@ export type Method = "curl" | "npm" | "yarn" | "pnpm" | "bun" | "brew" | "scoop"
 
 export type ReleaseType = "patch" | "minor" | "major"
 
-// KanCode publishes to npm as a scoped package and tags GitHub releases under
-// the puetsua/kancode repo. The unscoped binary name used by per-platform
-// packages and Homebrew/Scoop/Choco feeds is `kancode` (KanCode does not
-// publish those feeds yet, but the names are kept consistent for when it does).
-const NPM_PACKAGE = "@puetsua/kancode"
+/**
+ * Canonical npm name for the app. Single source of truth: `script/publish.ts`
+ * publishes under this exact name, `uninstall` tells users to remove it, and an
+ * installed CLI polls it for updates. A mismatch between publish name and this
+ * constant silently breaks self-update, so a test asserts they agree.
+ *
+ * Unscoped, matching the per-platform `kancode-<platform>` packages and the
+ * Homebrew/Scoop/Choco feed names (not published yet, kept consistent for when
+ * they are). Legacy installs from `@puetsua/kancode` are bridged at publish time.
+ */
+export const NPM_PACKAGE = "kancode"
 const GITHUB_REPO = "puetsua/kancode"
 const BIN_NAME = "kancode"
 

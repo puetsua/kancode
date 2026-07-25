@@ -135,8 +135,15 @@ function makeRegistry(builtin: ReadonlyMap<string, DecideFn> = new Map()) {
       registrations?.get(scopeKey(input.scope)) ??
       registrations?.get(scopeKey(undefined))
     if (!handler) {
-      yield* Effect.logError("unknown permission module", { module: input.moduleID })
-      return { decision: "deny" as const }
+      // Absence of a registration is a deployment state, not a safety signal: the module's
+      // plugin may still be installing, be unavailable offline, or have been removed. Denying
+      // here makes gated tools unusable; asking leaves the human in control. Errors from a
+      // module that IS registered still fail closed to deny below.
+      yield* Effect.logWarning("permission module not registered", { module: input.moduleID })
+      return {
+        decision: "ask" as const,
+        reason: `Permission module "${input.moduleID}" is not available; approve manually.`,
+      }
     }
     const outcome = yield* handler(input)
     const normalized = normalizeDecide(outcome)

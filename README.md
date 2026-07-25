@@ -21,7 +21,7 @@
 ### Install
 
 ```bash
-npm i -g @puetsua/kancode
+npm i -g kancode
 ```
 
 Then start the TUI:

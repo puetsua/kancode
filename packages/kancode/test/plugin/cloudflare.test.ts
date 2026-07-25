@@ -1,20 +1,8 @@
 import { expect, test } from "bun:test"
 import { CloudflareAIGatewayAuthPlugin } from "@/plugin/cloudflare"
+import { fakePluginInput } from "../fixture/plugin"
 
-const pluginInput = {
-  client: {} as never,
-  project: {} as never,
-  directory: "",
-  worktree: "",
-  experimental_workspace: {
-    register() {},
-  },
-  permission: {
-    registerModule() {},
-  },
-  serverUrl: new URL("https://example.com"),
-  $: {} as never,
-}
+const pluginInput = fakePluginInput()
 
 function makeHookInput(overrides: { providerID?: string; apiId?: string; reasoning?: boolean }) {
   return {

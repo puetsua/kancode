@@ -8,8 +8,11 @@ import { fileURLToPath } from "url"
 const dir = fileURLToPath(new URL("..", import.meta.url))
 process.chdir(dir)
 
-// Workspace package is `@kancode/cli`; npm distribution stays `@puetsua/kancode` with `kancode` bin.
-const publishName = "@puetsua/kancode"
+// Workspace package is `@kancode/cli`; npm distribution is the unscoped
+// `kancode` with a `kancode` bin, matching the per-platform `kancode-<platform>`
+// packages. Must equal Installation.NPM_PACKAGE or self-update breaks — asserted
+// by packages/kancode/test/installation/publish-name.test.ts.
+const publishName = "kancode"
 const binName = Object.keys(pkg.bin ?? {})[0] ?? "kancode"
 
 async function published(name: string, version: string) {

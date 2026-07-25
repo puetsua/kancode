@@ -548,6 +548,30 @@ testEffect(denyShapelessEnv).instance("module deny without a reason names the mo
     expect(result).toBeInstanceOf(PermissionV1.DeniedError)
     expect((result as PermissionV1.DeniedError).reason).toBe('Permission module "puetsua_permit" denied the action')
     expect((result as PermissionV1.DeniedError).cruiseControlReview).toBeUndefined()
+    // The model sees `.message`. A module denial reports its semantic cause and
+    // deliberately does not fall through to DeniedError's ruleset dump.
+    const message = (result as PermissionV1.DeniedError).message
+    expect(message).toBe('Permission module "puetsua_permit" denied the action')
+    expect(message).not.toContain("Relevant rules")
+  }),
+)
+
+// Static denies carry no reason, so they keep the ruleset the model can adapt to.
+testEffect(denyShapelessEnv).instance("static deny still reports the blocking ruleset", () =>
+  Effect.gen(function* () {
+    const permission = yield* Permission.Service
+    const result = yield* permission
+      .ask({
+        sessionID: SessionID.make("ses_static_deny"),
+        permission: "bash",
+        patterns: ["ls"],
+        metadata: {},
+        always: [],
+        ruleset: Permission.fromConfig({ bash: "deny" }),
+      })
+      .pipe(Effect.flip)
+    expect((result as PermissionV1.DeniedError).reason).toBeUndefined()
+    expect((result as PermissionV1.DeniedError).message).toContain("Relevant rules")
   }),
 )
 

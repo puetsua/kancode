@@ -129,6 +129,13 @@ export function cruiseControlMetadataFromReview(review: PermissionModuleReview):
   }
 }
 
+/**
+ * Always returns a reason, which means `DeniedError.message` reports it verbatim
+ * and never falls through to its ruleset dump. That is deliberate: a module
+ * denial has a semantic cause ("Risk: high · Intent: low — rewrites history")
+ * that tells the model far more than the JSON rules would. Static `deny` rules
+ * still carry no reason, so they keep the ruleset dump the model can adapt to.
+ */
 function moduleDeniedReason(
   assessment: PermissionModuleReview | undefined,
   reason: string | undefined,

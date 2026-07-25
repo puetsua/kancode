@@ -100,7 +100,12 @@ export type ModelGenerateInput = {
   /** `providerID/modelID`, e.g. `opencode/deepseek-v4-flash`. Required — the host never substitutes a default. */
   model: string
   messages: readonly ModelMessage[]
-  /** Plain JSON Schema describing the expected object. */
+  /**
+   * Plain JSON Schema describing the expected object. Sent to the provider to
+   * request structured output; enforcement is provider-side. The host does NOT
+   * re-validate the result, so treat `T` as your assertion and check the shape
+   * yourself if correctness matters.
+   */
   schema: Record<string, unknown>
   schemaName?: string
   schemaDescription?: string
@@ -112,14 +117,17 @@ export type ModelGenerateInput = {
 }
 
 export type ModelGenerateResult<T = unknown> = {
+  /** Parsed model output. Not re-validated against `schema` — see the note there. */
   object: T
   model: { providerID: string; modelID: string }
   usage?: { input?: number; output?: number; total?: number }
 }
 
 /**
- * `no_object` carries the raw model text so callers can attempt their own lenient
- * recovery. `unavailable` means the provider stack is not initialized yet.
+ * `no_object` means the model produced nothing parseable as an object; it carries
+ * the raw text so callers can attempt their own lenient recovery. It does NOT
+ * fire for parseable output that violates the schema — the host does not check
+ * that. `unavailable` means the provider stack is not initialized yet.
  */
 export type ModelErrorCode =
   | "model_unset"

@@ -40,6 +40,8 @@ import * as Option from "effect/Option"
 
 type State = {
   hooks: Hooks[]
+  /** Clears every plugin's per-turn model call budget. Called on each new user message. */
+  resetModelBudgets: () => void
 }
 
 function validPermissionModuleDecision(value: unknown) {
@@ -404,7 +406,12 @@ const layer = Layer.effect(
           ),
         )
 
-        return { hooks }
+        return {
+          hooks,
+          resetModelBudgets: () => {
+            for (const capability of capabilities.values()) capability.resetTurn()
+          },
+        }
       }),
     )
 
@@ -415,6 +422,10 @@ const layer = Layer.effect(
     >(name: Name, input: Input, output: Output) {
       if (!name) return output
       const s = yield* InstanceState.get(state)
+      // A new user message starts a new turn. Without this the per-turn budget is a
+      // process-lifetime budget: once spent, every model call fails and any plugin
+      // that fails closed (like cruise_control) denies every gated tool forever.
+      if (name === "chat.message") s.resetModelBudgets()
       for (const hook of s.hooks) {
         const fn = hook[name] as any
         if (!fn) continue

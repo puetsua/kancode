@@ -162,6 +162,7 @@ const layer = Layer.effect(
       if (matched.every((rule) => rule.effect === "allow")) return { effect: "allow" as const, rules: all }
 
       let needsAsk = false
+      let moduleReason: string | undefined
       const moduleIDs = new Set<string>()
       for (const rule of matched) {
         if (rule.effect !== "ask") continue
@@ -179,28 +180,33 @@ const layer = Layer.effect(
           return { effect: "ask" as const, rules: all }
         }
         for (const moduleID of moduleIDs) {
-          const { decision } = yield* modules.value.decide({
+          const { decision, reason } = yield* modules.value.decide({
             moduleID,
             permission: input.action,
             patterns: input.resources,
             metadata: input.metadata ?? {},
           })
-          if (decision === "deny") return { effect: "deny" as const, rules: all }
-          if (decision === "ask") needsAsk = true
+          if (decision === "deny") return { effect: "deny" as const, rules: all, reason }
+          // Carry the module's rationale so the human ask can explain itself — an
+          // unregistered module asks with a reason naming what is missing.
+          if (decision === "ask") {
+            needsAsk = true
+            moduleReason = reason?.trim() || moduleReason
+          }
         }
       }
 
-      return { effect: needsAsk ? ("ask" as const) : ("allow" as const), rules: all }
+      return { effect: needsAsk ? ("ask" as const) : ("allow" as const), rules: all, reason: moduleReason }
     })
 
-    function request(input: AssertInput): Request {
+    function request(input: AssertInput, reason?: string): Request {
       return {
         id: input.id ?? ID.create(),
         sessionID: input.sessionID,
         action: input.action,
         resources: input.resources,
         save: input.save,
-        metadata: input.metadata,
+        metadata: reason ? { ...input.metadata, reason } : input.metadata,
         source: input.source,
       }
     }
@@ -221,7 +227,7 @@ const layer = Layer.effect(
 
     const ask = EffectRuntime.fn("PermissionV2.ask")(function* (input: AssertInput) {
       const result = yield* evaluateInput(input)
-      const value = request(input)
+      const value = request(input, result.reason)
       if (result.effect === "ask") yield* create(value, input.agent)
       return { id: value.id, effect: result.effect }
     })
@@ -236,7 +242,7 @@ const layer = Layer.effect(
             })
           }
           if (result.effect === "allow") return
-          const item = yield* create(request(input), input.agent)
+          const item = yield* create(request(input, result.reason), input.agent)
           return yield* restore(Deferred.await(item.deferred)).pipe(
             EffectRuntime.catchTag("PermissionV2.DeclinedError", (error) => EffectRuntime.die(error)),
             EffectRuntime.ensuring(

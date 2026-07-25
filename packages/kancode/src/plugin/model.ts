@@ -35,6 +35,52 @@ export const DEFAULT_CONCURRENCY = 4
  */
 export const DEFAULT_TURN_BUDGET = 200
 
+/**
+ * Per-turn budget, overridable via `KANCODE_PLUGIN_MODEL_TURN_BUDGET` so operators
+ * can tighten it and tests can force the exhausted path.
+ */
+export function configuredTurnBudget(): number {
+  const raw = process.env.KANCODE_PLUGIN_MODEL_TURN_BUDGET ?? process.env.OPENCODE_PLUGIN_MODEL_TURN_BUDGET
+  const parsed = raw === undefined ? Number.NaN : Number.parseInt(raw, 10)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_TURN_BUDGET
+}
+
+/**
+ * Counting semaphore with direct slot handoff.
+ *
+ * `release` gives its slot straight to the next waiter instead of decrementing
+ * and then waking it. Decrementing first opens a window — from `release`
+ * returning until the waiter's microtask runs — in which a fresh `acquire` sees
+ * a free slot, takes it, and then the waiter increments on top, putting more
+ * work in flight than `limit` allows.
+ */
+export function makeSemaphore(limit: number) {
+  let active = 0
+  const waiting: Array<() => void> = []
+  return {
+    active: () => active,
+    waiting: () => waiting.length,
+    acquire: async () => {
+      if (active < limit) {
+        active += 1
+        return
+      }
+      await new Promise<void>((resolve) => waiting.push(resolve))
+    },
+    release: () => {
+      const next = waiting.shift()
+      if (next) return next()
+      active -= 1
+    },
+  }
+}
+
+/** Resolves the effective per-call deadline, defaulting and clamping the caller's request. */
+export function effectiveTimeout(requested: number | undefined): number {
+  if (requested === undefined) return DEFAULT_TIMEOUT_MS
+  return Math.min(Math.max(1, requested), MAX_TIMEOUT_MS)
+}
+
 class ModelError extends Error {
   override readonly name = "ModelGenerateError" as const
   readonly code: ModelErrorCode
@@ -66,7 +112,7 @@ export function modelError(
 function classify(cause: unknown): ModelError {
   if (cause instanceof ModelError) return cause
   if (NoObjectGeneratedError.isInstance(cause)) {
-    return new ModelError("no_object", "Model output did not match the requested schema", {
+    return new ModelError("no_object", "Model produced no parseable object", {
       retryable: true,
       text: cause.text,
       cause,
@@ -119,25 +165,9 @@ export interface ModelCapabilityOptions {
  * `unavailable` instead.
  */
 export function makeModelCapability(options: ModelCapabilityOptions): ModelCapability & { resetTurn: () => void } {
-  const limit = options.concurrency ?? DEFAULT_CONCURRENCY
-  const budget = options.turnBudget ?? DEFAULT_TURN_BUDGET
-  let active = 0
+  const budget = options.turnBudget ?? configuredTurnBudget()
+  const gate = makeSemaphore(options.concurrency ?? DEFAULT_CONCURRENCY)
   let spent = 0
-  const waiting: Array<() => void> = []
-
-  async function acquire() {
-    if (active < limit) {
-      active += 1
-      return
-    }
-    await new Promise<void>((resolve) => waiting.push(resolve))
-    active += 1
-  }
-
-  function release() {
-    active -= 1
-    waiting.shift()?.()
-  }
 
   async function generate<T>(input: ModelGenerateInput): Promise<ModelGenerateResult<T>> {
     const ref = input.model?.trim()
@@ -147,9 +177,9 @@ export function makeModelCapability(options: ModelCapabilityOptions): ModelCapab
     }
     spent += 1
 
-    const timeoutMs = Math.min(input.timeoutMs ?? DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS)
+    const timeoutMs = effectiveTimeout(input.timeoutMs)
     const started = Date.now()
-    await acquire()
+    await gate.acquire()
     try {
       return await options.bridge.promise(
         Effect.gen(function* () {
@@ -222,7 +252,7 @@ export function makeModelCapability(options: ModelCapabilityOptions): ModelCapab
     } catch (cause) {
       throw classify(cause)
     } finally {
-      release()
+      gate.release()
     }
   }
 

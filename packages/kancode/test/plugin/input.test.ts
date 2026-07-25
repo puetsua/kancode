@@ -1,4 +1,4 @@
-import { describe, expect } from "bun:test"
+import { afterEach, beforeEach, describe, expect } from "bun:test"
 import { Effect } from "effect"
 import { CrossSpawnSpawner } from "@kancode/core/cross-spawn-spawner"
 import { Global } from "@kancode/core/global"
@@ -132,6 +132,52 @@ describe("PluginInput.model", () => {
       {},
       Effect.gen(function* () {
         expect(yield* triggerSystemTransform()).toEqual(["function", "ModelGenerateError:unavailable"])
+      }),
+    ),
+  )
+})
+
+describe("model call budget", () => {
+  beforeEach(() => {
+    process.env.KANCODE_PLUGIN_MODEL_TURN_BUDGET = "1"
+  })
+  afterEach(() => {
+    delete process.env.KANCODE_PLUGIN_MODEL_TURN_BUDGET
+  })
+
+  // The unit test in model.test.ts proves resetTurn works; this proves it is
+  // actually wired. Without it the per-turn budget is a process-lifetime budget
+  // and a fail-closed plugin denies every gated tool for the rest of the session.
+  it.instance("is reset on each new user message", () =>
+    withProject(
+      [
+        "let calls = 0",
+        "export default {",
+        `  id: ${JSON.stringify(PLUGIN_ID)},`,
+        "  server: async (input) => ({",
+        `    "chat.message": async () => {`,
+        "      calls += 1",
+        "      try {",
+        "        await input.model.generate({ model: 'openai/gpt-5.2', messages: [], schema: {} })",
+        "      } catch (error) {",
+        "        globalThis.__budgetCodes = (globalThis.__budgetCodes ?? []).concat(error.code)",
+        "      }",
+        "    },",
+        "  }),",
+        "}",
+        "",
+      ].join("\n"),
+      {},
+      Effect.gen(function* () {
+        const plugin = yield* Plugin.Service
+        // Budget of one call per turn, so an unreset counter is immediately visible.
+        // Provider is absent here, so a permitted call fails with `unavailable`;
+        // a refused one fails with `budget`.
+        yield* plugin.trigger("chat.message", { sessionID: "ses_a" } as never, {} as never)
+        yield* plugin.trigger("chat.message", { sessionID: "ses_a" } as never, {} as never)
+        const codes = (globalThis as { __budgetCodes?: string[] }).__budgetCodes ?? []
+        delete (globalThis as { __budgetCodes?: string[] }).__budgetCodes
+        expect(codes).toEqual(["unavailable", "unavailable"])
       }),
     ),
   )

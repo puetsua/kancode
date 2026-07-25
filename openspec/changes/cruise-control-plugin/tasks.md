@@ -8,11 +8,11 @@
 
 ## 2. Identity-Agnostic Review Metadata
 
-- [ ] 2.1 Rename `CruiseControlReview` to `PermissionModuleReview` in `packages/kancode/src/permission/index.ts`, keeping the old name as an exported alias for existing callers
-- [ ] 2.2 Replace the three `moduleID === CRUISE_CONTROL` branches with shape detection: any module metadata parsing as `{risk, intent, reason}` gets review formatting
-- [ ] 2.3 Generalize `packages/kancode/src/session/processor.ts` to preserve a named set of module-review metadata keys instead of hardcoding `previous.cruise_control`
-- [ ] 2.4 Add a test proving a non-`cruise_control` module returning `{risk,intent,reason}` gets the same rendering and preservation
-- [ ] 2.5 Run `bun typecheck` and `bun test` in `packages/kancode`
+- [x] 2.1 Rename `CruiseControlReview` to `PermissionModuleReview` in `packages/kancode/src/permission/index.ts`, keeping the old name as an exported alias for existing callers
+- [x] 2.2 Replace the three `moduleID === CRUISE_CONTROL` branches with shape detection: any module metadata parsing as `{risk, intent, reason}` gets review formatting
+- [x] 2.3 Generalize `packages/kancode/src/session/processor.ts` to preserve a named set of module-review metadata keys instead of hardcoding `previous.cruise_control`
+- [x] 2.4 Add a test proving a non-`cruise_control` module returning `{risk,intent,reason}` gets the same rendering and preservation
+- [x] 2.5 Run `bun typecheck` and `bun test` in `packages/kancode`
 
 ## 3. Plugin Paths And Server-Side Enablement
 

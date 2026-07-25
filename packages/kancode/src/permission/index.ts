@@ -8,22 +8,40 @@ import os from "os"
 import { PermissionV1 } from "@kancode/core/v1/permission"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { PermissionModule } from "@/permission/module"
-import { PermissionModule as PermissionModuleSchema } from "@kancode/schema/permission-module"
 import { InstanceRef } from "@/effect/instance-ref"
 
 export const Event = PermissionV1.Event
 
-export interface CruiseControlReview {
+/**
+ * Structured assessment any permission module may return. Recognized by shape,
+ * not by module id, so third-party classifiers get the same rendering as
+ * `cruise_control`.
+ */
+export interface PermissionModuleReview {
   risk: "high" | "medium" | "low"
   intent: "high" | "medium" | "low"
   reason: string
 }
 
+/** @deprecated Use {@link PermissionModuleReview}. */
+export type CruiseControlReview = PermissionModuleReview
+
+/**
+ * Tool-part metadata keys carrying a module review. Named `cruise_control*` for
+ * backwards compatibility with persisted parts and the TUI renderer; any module
+ * may populate them.
+ */
+export const MODULE_REVIEW_SUMMARY_KEY = "cruise_control"
+export const MODULE_REVIEW_DETAIL_KEY = "cruise_control_review"
+
+/** Metadata keys preserved across tool completion so a review survives the tool's own output. */
+export const MODULE_REVIEW_METADATA_KEYS = [MODULE_REVIEW_SUMMARY_KEY, MODULE_REVIEW_DETAIL_KEY] as const
+
 export interface AskResult {
-  /** Short cruise_control / module conclusion when a tool was auto-allowed. */
+  /** Short module conclusion when a tool was auto-allowed. */
   conclusion?: string
-  /** Structured classifier assessment for the TUI-reviewed comment. */
-  cruiseControlReview?: CruiseControlReview
+  /** Structured module assessment for the TUI-reviewed comment. */
+  cruiseControlReview?: PermissionModuleReview
 }
 
 export interface AskInput extends PermissionV1.AskInput {
@@ -73,11 +91,12 @@ export function evaluate(permission: string, pattern: string, ...rulesets: Permi
 
 export class Service extends Context.Service<Service, Interface>()("@kancode/Permission") {}
 
-function classifierLevel(value: unknown): value is CruiseControlReview["risk"] {
+function classifierLevel(value: unknown): value is PermissionModuleReview["risk"] {
   return value === "high" || value === "medium" || value === "low"
 }
 
-function cruiseControlReview(value: Record<string, unknown> | undefined): CruiseControlReview | undefined {
+/** Detects a review by shape so any module returning risk/intent/reason is treated alike. */
+function parseModuleReview(value: Record<string, unknown> | undefined): PermissionModuleReview | undefined {
   if (!value) return undefined
   if (!classifierLevel(value.risk) || !classifierLevel(value.intent) || typeof value.reason !== "string")
     return undefined
@@ -86,26 +105,26 @@ function cruiseControlReview(value: Record<string, unknown> | undefined): Cruise
   return { risk: value.risk, intent: value.intent, reason }
 }
 
-export function formatCruiseControlReview(review: CruiseControlReview): string {
+export function formatCruiseControlReview(review: PermissionModuleReview): string {
   return `Risk: ${review.risk} · Intent: ${review.intent} — ${review.reason}`
 }
 
-export function cruiseControlMetadataFromReview(review: CruiseControlReview): Record<string, unknown> {
+export function cruiseControlMetadataFromReview(review: PermissionModuleReview): Record<string, unknown> {
   return {
-    cruise_control: formatCruiseControlReview(review),
-    cruise_control_review: review,
+    [MODULE_REVIEW_SUMMARY_KEY]: formatCruiseControlReview(review),
+    [MODULE_REVIEW_DETAIL_KEY]: review,
   }
 }
 
-function cruiseControlDeniedReason(
-  assessment: CruiseControlReview | undefined,
+function moduleDeniedReason(
+  assessment: PermissionModuleReview | undefined,
   reason: string | undefined,
-  isCruiseControl: boolean,
-): string | undefined {
+  moduleID: string,
+): string {
   if (assessment) return formatCruiseControlReview(assessment)
   const brief = reason?.trim()
   if (brief) return brief
-  return isCruiseControl ? "Cruise control denied the action" : undefined
+  return `Permission module "${moduleID}" denied the action`
 }
 
 const layer = Layer.effect(
@@ -140,7 +159,7 @@ const layer = Layer.effect(
       const moduleIDs = new Set<string>()
       let metadata = request.metadata
       let conclusion: string | undefined
-      let review: CruiseControlReview | undefined
+      let review: PermissionModuleReview | undefined
       const instance = yield* InstanceRef
 
       const unrestricted = process.env.KANCODE_UNRESTRICTED_PERMISSION === "1"
@@ -197,12 +216,11 @@ const layer = Layer.effect(
               cacheScope: input.cacheScope,
             })
             const reason = result.reason?.trim() || undefined
-            const isCruiseControl = moduleID === PermissionModuleSchema.CRUISE_CONTROL
+            const assessment = parseModuleReview(result.metadata)
             if (result.decision === "deny") {
-              const assessment = isCruiseControl ? cruiseControlReview(result.metadata) : undefined
               return yield* new PermissionV1.DeniedError({
                 ruleset: ruleset.filter((rule) => Wildcard.match(request.permission, rule.permission)),
-                reason: cruiseControlDeniedReason(assessment, reason, isCruiseControl),
+                reason: moduleDeniedReason(assessment, reason, moduleID),
                 ...(assessment ? { cruiseControlReview: assessment } : {}),
               })
             }
@@ -217,7 +235,7 @@ const layer = Layer.effect(
               continue
             }
             if (reason) conclusion = reason
-            if (isCruiseControl) review = cruiseControlReview(result.metadata)
+            if (assessment) review = assessment
           }
         }
       }

@@ -516,6 +516,63 @@ itAllowReason.instance("cruise_control allow returns conclusion", () =>
   }),
 )
 
+itAllowReason.instance("third-party module review is recognized by shape, not module id", () =>
+  Effect.gen(function* () {
+    const permission = yield* Permission.Service
+    const result = yield* permission.ask({
+      sessionID: SessionID.make("ses_third_party_review"),
+      permission: "bash",
+      patterns: ["ls"],
+      metadata: {},
+      always: ["ls"],
+      ruleset: Permission.fromConfig({ bash: "puetsua_permit" }),
+      tool: { messageID: MessageID.make("msg_third_party_review"), callID: "call_third_party" },
+    })
+    expect(result.cruiseControlReview).toEqual({
+      risk: "low",
+      intent: "medium",
+      reason: "safe read-only command",
+    })
+    expect(cruiseControlMetadata(result)).toEqual({
+      cruise_control: "Risk: low · Intent: medium — safe read-only command",
+      cruise_control_review: { risk: "low", intent: "medium", reason: "safe read-only command" },
+    })
+  }),
+)
+
+const denyShapelessEnv = AppNodeBuilder.build(
+  LayerNode.group([
+    Permission.node,
+    PermissionModule.node,
+    EventV2Bridge.node,
+    CrossSpawnSpawner.node,
+    InstanceStore.node,
+  ]),
+  [
+    [InstanceStore.bootstrapNode, noopBootstrap],
+    [PermissionModule.node, stubModules(() => Effect.succeed({ decision: "deny" as const }))],
+  ],
+)
+
+testEffect(denyShapelessEnv).instance("module deny without a reason names the module", () =>
+  Effect.gen(function* () {
+    const permission = yield* Permission.Service
+    const result = yield* permission
+      .ask({
+        sessionID: SessionID.make("ses_module_deny_bare"),
+        permission: "bash",
+        patterns: ["ls"],
+        metadata: {},
+        always: [],
+        ruleset: Permission.fromConfig({ bash: "puetsua_permit" }),
+      })
+      .pipe(Effect.flip)
+    expect(result).toBeInstanceOf(PermissionV1.DeniedError)
+    expect((result as PermissionV1.DeniedError).reason).toBe('Permission module "puetsua_permit" denied the action')
+    expect((result as PermissionV1.DeniedError).cruiseControlReview).toBeUndefined()
+  }),
+)
+
 const denyReasonEnv = AppNodeBuilder.build(
   LayerNode.group([
     Permission.node,

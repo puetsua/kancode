@@ -170,22 +170,21 @@ const layer = Layer.effect(
         const match = yield* readToolCall(toolCallID)
         if (!match || match.part.state.status !== "running") return
         const previous = isRecord(match.part.state.metadata) ? match.part.state.metadata : {}
-        const cruise =
-          typeof previous.cruise_control === "string"
-            ? {
-                cruise_control: previous.cruise_control,
-                ...(isRecord(previous.cruise_control_review)
-                  ? { cruise_control_review: previous.cruise_control_review }
-                  : {}),
-              }
-            : undefined
+        // Permission-module review survives tool completion; the tool's own metadata
+        // does not carry it. Any module may populate these keys, not just cruise_control.
+        const review = Object.fromEntries(
+          Permission.MODULE_REVIEW_METADATA_KEYS.filter((key) => previous[key] !== undefined).map((key) => [
+            key,
+            previous[key],
+          ]),
+        )
         yield* session.updatePart({
           ...match.part,
           state: {
             status: "completed",
             input: match.part.state.input,
             output: output.output,
-            metadata: { ...output.metadata, ...cruise },
+            metadata: { ...output.metadata, ...review },
             title: output.title,
             time: { start: match.part.state.time.start, end: Date.now() },
             attachments: output.attachments,

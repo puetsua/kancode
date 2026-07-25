@@ -1276,6 +1276,36 @@ describe("classifier contract", () => {
     expect(managedAppDirectoryAllow("read", [configGlob], Global.Path)).toBeUndefined()
   })
 
+  test("a backed-up classify queue fails closed instead of hanging", async () => {
+    resetClassifyGapForTests()
+    // One slow decision holds the serialized queue; a decision queued behind it
+    // must give up and deny rather than wait indefinitely. The host puts no
+    // deadline on `decide`, so an unbounded wait surfaces to the user as a hang.
+    let releaseSlow: (() => void) | undefined
+    const holding = runClassifier({
+      paths: TEST_PATHS,
+      permission: "bash",
+      patterns: ["sleep 1"],
+      opts: { allowlist: ["bash"], timeout_ms: 5000, retries: 1, classify_gap_ms: 0 },
+      classify: () =>
+        new Promise((resolve) => {
+          releaseSlow = () => resolve(lowRisk("held"))
+        }),
+    })
+
+    const queued = await runClassifier({
+      paths: TEST_PATHS,
+      permission: "bash",
+      patterns: ["ls"],
+      opts: { allowlist: ["bash"], timeout_ms: 5000, retries: 1, classify_gap_ms: 0, queue_wait_ms: 40 },
+      classify: async () => lowRisk("should not get here"),
+    })
+    expect(queued.decision).toBe("deny")
+
+    releaseSlow?.()
+    await holding
+  })
+
   describe("explicit approval is never cached", () => {
     const scope = "workspace\0session\0prompt"
     const approval = [

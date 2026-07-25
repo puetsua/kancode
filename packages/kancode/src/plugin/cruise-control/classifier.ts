@@ -43,6 +43,8 @@ export namespace PermissionModuleSchema {
     dynamic_list?: { enabled?: boolean; max_size?: number }
     parallel_classify?: boolean
     classify_gap_ms?: number
+    /** Max time a decision may wait for the serialized classify queue before failing closed. */
+    queue_wait_ms?: number
   }
 }
 
@@ -97,8 +99,14 @@ function sleep(ms: number) {
  * Serialize classify and insert a short pause before each call after the first,
  * so concurrent tool permissions do not hammer the classifier model back-to-back.
  */
-function withSerializedClassify<A>(run: () => Promise<A>, gapMs: number): Promise<A> {
-  const result = classifyChain.then(async () => {
+function withSerializedClassify<A>(run: () => Promise<A>, gapMs: number, maxWaitMs: number): Promise<A> {
+  // Bound time spent waiting for the queue, not just for the model. Without this
+  // one slow decision stalls every decision behind it, and since the host puts no
+  // deadline on `decide`, that surfaces to the user as a hang rather than a deny.
+  let abandoned = false
+  const granted = classifyChain.then(async () => {
+    // Losing the race must not still spend a model call once the caller is gone.
+    if (abandoned) throw new ClassifyQueueTimeoutError(maxWaitMs)
     const wait = Math.max(0, lastClassifyAt + gapMs - Date.now())
     if (wait > 0) await sleep(wait)
     try {
@@ -108,11 +116,29 @@ function withSerializedClassify<A>(run: () => Promise<A>, gapMs: number): Promis
     }
   })
   // Chain on settlement, not success, so one failure does not wedge the queue.
-  classifyChain = result.then(
+  classifyChain = granted.then(
     () => undefined,
     () => undefined,
   )
-  return result
+
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const guard = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      abandoned = true
+      reject(new ClassifyQueueTimeoutError(maxWaitMs))
+    }, maxWaitMs)
+  })
+  return Promise.race([granted, guard]).finally(() => {
+    if (timer) clearTimeout(timer)
+  })
+}
+
+/** Rejects with this when a decision waits too long for the serialize queue. */
+class ClassifyQueueTimeoutError extends Error {
+  constructor(waitedMs: number) {
+    super(`QueueTimeoutError: waited over ${waitedMs}ms for the classify queue`)
+    this.name = "QueueTimeoutError"
+  }
 }
 
 /** Rejects with this when a single classify attempt exceeds its budget. */
@@ -677,8 +703,15 @@ export async function runClassifier(input: {
   // for the serialize queue. Racing the queue wait would abandon an attempt that
   // had not started yet, losing a retry while the queued work still ran later.
   const attempt = () => withTimeout(input.classify, timeoutMs)
+  // One decision's own worst case is maxAttempts timeouts plus the gaps between
+  // them; waiting appreciably longer than that means the queue is backed up, and
+  // failing closed beats stalling the session.
+  const queueWaitMs =
+    input.opts?.queue_wait_ms ?? Math.max(1, maxAttempts) * timeoutMs + Math.max(0, maxAttempts - 1) * classifyGapMs
   const classify = () =>
-    input.opts?.parallel_classify === true ? attempt() : withSerializedClassify(attempt, classifyGapMs)
+    input.opts?.parallel_classify === true
+      ? attempt()
+      : withSerializedClassify(attempt, classifyGapMs, queueWaitMs)
 
   const classifyOnce = async () => {
     const result = await classify()
